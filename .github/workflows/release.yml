@@ -38,7 +38,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
             libpipewire-0.3-dev libclang-dev libdbus-1-dev libxcb1-dev libxcb-randr0-dev libx11-dev \
-            libwayland-dev libegl1-mesa-dev libgbm-dev pkg-config
+            libwayland-dev libegl1-mesa-dev libgbm-dev pkg-config cmake
+
+      # whisper.cpp's bindings are generated with libclang.
+      - name: libclang (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -97,6 +103,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libclang-dev cmake
+
+      # whisper.cpp's bindings are generated with libclang.
+      - name: libclang (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:

@@ -61,8 +61,9 @@ observing it. What is available:
      centre) unless a compositor-specific source exists. The UI says so.
 2. **Clicks and key activity — `evdev`.** Reading `/dev/input/event*` works
    below the compositor on any session type, but needs membership of the
-   `input` group (or a udev rule). Cinesnap only records *that* a button or key
-   went down and when; it never records which key.
+   `input` group (or a udev rule). Cinesnap records *that* a button or key
+   went down and when. Typed characters are never recorded; only shortcuts
+   and action keys get a label (see [Keystrokes](#keystrokes-and-privacy)).
 3. **No `evdev` access → inferred clicks.** A dwell detector marks a click
    candidate when the cursor decelerates to a stop and stays within a few
    pixels for 350 ms after a deliberate move. It is less precise than real
@@ -157,8 +158,87 @@ ffmpeg (decode, kept ranges only) ──raw RGBA──▶ compositor ──raw R
   in two passes with a per-video palette (`palettegen` / `paletteuse` with
   rectangle diffing) for small, clean README GIFs.
 
-The export path is also exposed as a CLI (`cinesnap render <project> -o out.mp4`, or the GUI-free `cinesnap-cli` binary)
+The export path is also exposed as a CLI (`cinesnap render <project> --preset readme`, or the GUI-free `cinesnap-cli` binary)
 which is what the test suite and the README demo video use.
+
+### The timeline
+
+A project is a list of clips: recordings and cards. Recordings added later
+are copied (hard-linked where possible) into `clips/<id>/` inside the bundle,
+so a project stays one self-contained folder. Edit state lives in *timeline
+time*, the clips laid end to end; the per-recording motion code never sees
+more than one clip, because `Project::local` hands it a single-recording view
+with the cuts and zooms that fall inside that clip shifted to its own time.
+
+Transitions do not overlap clips. A blend is centred on the join; the clip
+that is not playing is rendered frozen on its first or last frame and the two
+finished frames are mixed (`blend_transition`). Output time therefore stays a
+simple function of the cuts, and audio needs no special handling.
+
+Cards, annotations, the keystroke overlay and captions are drawn by the same
+two renderers as everything else. Text is the one place where a browser and
+a rasteriser disagree by default, so both sides lay text out the same
+deliberately plain way: bundled fonts only, glyphs placed by advance width
+(no kerning or ligatures), and vertical positions that never depend on font
+metrics. `text.rs` and `src/render/text.ts` are that agreement.
+
+### Keystrokes and privacy
+
+The keystroke overlay needs to know which shortcut was pressed, which is at
+odds with never recording keys. The rule (`events::shortcut`) is: a key gets
+a label only if Ctrl, Alt or the OS key is held with it, or if it is an
+action key (Enter, Esc, Tab, arrows, function keys…). Letters, digits and
+punctuation typed on their own or with Shift are logged as "a key went down"
+and nothing more, so typed text, passwords included, cannot be reconstructed
+from a recording. Labelling can be switched off before recording.
+
+### Sound
+
+```
+mic.wav ──ffmpeg: align · denoise · EQ · loudness──▶ cache/voice-<clip>.wav   (per recording, clip time)
+                                                             │
+music (built-in synth or a file) ──▶ cache/music-*.wav       ▼
+                                          └──────▶ mixer (Rust): cuts · loop · duck ──▶ soundtrack.wav
+```
+
+Each microphone track is cleaned up once by ffmpeg and cached. The mixer then
+walks the output timeline in Rust: it splices the voice at the cuts with 6 ms
+fades (no clicks), loops the music, and lowers it under speech using a gain
+envelope computed from the voice level, with a little lookahead so the music
+is already down when a sentence starts. The export muxes that file; the
+editor plays the very same file for the preview, rebuilt in the background
+whenever an edit changes it.
+
+The built-in music is synthesised by `music.rs`, so there are no audio assets
+in the repository and nothing to license.
+
+### Speech
+
+Captions come from whisper.cpp, linked into the binary (`whisper` cargo
+feature, on by default). The model file is downloaded once into the app's
+data folder; after that nothing touches the network. Whisper is asked for one
+word per segment, which gives word timings for free. Those timings drive the
+karaoke captions, and they are what makes "delete a word, cut the video"
+work: a transcript edit is just a cut over that word's time range, so it is
+undoable like any other cut. Filler words come from the transcript; silences
+come from the level of the cleaned-up voice track, relative to how loud the
+speech is.
+
+Long jobs (model download, transcription, soundtrack, upload, export) report
+progress on one event channel and each has a cancel flag.
+
+### Getting videos out
+
+Export presets (`presets.rs`) carry a size rule, an optional frame rate and
+aspect ratio, and an optional byte limit. For small limits (GitHub's 10 MB)
+the frames are rendered once to a lossless intermediate and encoded as often
+as it takes to fit: first at the chosen quality, then at whatever bitrate the
+limit allows; GIFs step down in colours, size and frame rate.
+
+The share server (`share-server/`) is a separate, dependency-free Node
+program; the app and CLI upload to it with a bearer token. Scripted demos
+(`scripted/`) drive a browser with Playwright and write an ordinary
+recording bundle, so the rest of the pipeline does not know the difference.
 
 ## 3. Auto-zoom algorithm
 
@@ -180,9 +260,13 @@ it is marked `manual` and survives regeneration.
 
 ## 4. Frontend
 
-React + Vite + TypeScript, state in a single store with undo/redo. Layout: a
-large preview, a timeline docked at the bottom (zoom track, cut track,
-playhead), and a collapsible settings panel on the right. The preview is a 2D
+React + Vite + TypeScript, state in a single store with undo/redo. Every edit
+is a change to the project object, which is what makes undo cover everything
+and autosave trivial: 400 ms after the last change the project is written
+(atomically, with a backup), and again when the window is hidden or closed.
+Layout: a large preview with handles for annotations and the webcam bubble, a
+timeline docked at the bottom (clips, notes, webcam keyframes, zooms, cuts),
+and a tabbed settings panel on the right. The preview is a 2D
 canvas composited from the `<video>` element each animation frame.
 
 ## 5. Testing
@@ -190,5 +274,10 @@ canvas composited from the `<video>` element each animation frame.
 - `motion/` and `project/` are pure and unit tested.
 - The compositor and export pipeline are tested end to end against a synthetic
   recording (ffmpeg test pattern plus a generated event log).
+- The project file is written by the frontend and read by the core, so a
+  fixture that uses every editor feature is checked from both sides
+  (`src/lib/contract.test.ts`, `tests/contract.rs`).
+- The share server and the scripted-demo runner have their own test suites
+  (`npm test` in each folder).
 - Capture backends are thin by design. Linux backends are exercised manually;
   Windows and macOS are build-verified in CI.

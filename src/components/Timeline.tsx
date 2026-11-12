@@ -7,6 +7,8 @@ import { clampZoom, formatTime, ticks, zoomAround } from "../lib/timeline";
 
 const PAD = 14;
 const MIN_ANNOTATION_MS = 300;
+/** Height of one row of annotation blocks. */
+const LANE_PX = 22;
 
 const TOOLS: { type: AnnotationType; icon: string; label: string; hint: string }[] = [
   { type: "text", icon: "T", label: "Text", hint: "Add a text callout" },
@@ -79,6 +81,18 @@ export function Timeline() {
 
   const duration = totalDuration(project);
   const clipSpans = useMemo(() => spans(project), [project.clips]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Annotations that overlap in time sit on separate rows.
+  const noteLanes = useMemo(() => {
+    const ends: number[] = [];
+    const of = new Map<string, number>();
+    for (const a of [...project.annotations].sort((x, y) => x.startMs - y.startMs)) {
+      let lane = ends.findIndex((end) => end <= a.startMs);
+      if (lane < 0) lane = ends.length;
+      ends[lane] = a.endMs;
+      of.set(a.id, lane);
+    }
+    return { of, count: Math.max(1, ends.length) };
+  }, [project.annotations]);
   const hasWebcam = project.clips.some((c) => c.kind === "recording" && c.source.webcam);
   /** Limits of the clip a time falls in: zooms belong to one recording. */
   const clipBounds = (ms: number) => clipSpans.find((c) => ms >= c.startMs - 0.5 && ms < c.endMs) ?? { startMs: 0, endMs: duration };
@@ -259,7 +273,7 @@ export function Timeline() {
           )}
 
           {project.annotations.length > 0 && (
-            <div className="tl-track note-track" onPointerDown={(e) => e.target === e.currentTarget && select(null)}>
+            <div className="tl-track note-track" style={{ height: 6 + noteLanes.count * LANE_PX }} onPointerDown={(e) => e.target === e.currentTarget && select(null)}>
               <span className="track-label">Notes</span>
               {project.annotations.map((a) => {
                 const selected = selection?.kind === "annotation" && selection.id === a.id;
@@ -267,7 +281,7 @@ export function Timeline() {
                   <div
                     key={a.id}
                     className={`note-block ${a.type} ${selected ? "selected" : ""}`}
-                    style={{ left: PAD + a.startMs * pxPerMs, width: Math.max(4, (a.endMs - a.startMs) * pxPerMs) }}
+                    style={{ left: PAD + a.startMs * pxPerMs, width: Math.max(4, (a.endMs - a.startMs) * pxPerMs), top: 3 + (noteLanes.of.get(a.id) ?? 0) * LANE_PX, height: LANE_PX - 2, bottom: "auto" }}
                     onPointerDown={(e) => {
                       select({ kind: "annotation", id: a.id });
                       const len = a.endMs - a.startMs;

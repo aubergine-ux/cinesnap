@@ -72,7 +72,7 @@ export function demoProject(): Project {
     format: "cinesnap-project",
     version: 1,
     createdAt: new Date().toISOString(),
-    app: "0.1.0",
+    app: "0.2.0",
     source,
     crop,
     cuts: [],
