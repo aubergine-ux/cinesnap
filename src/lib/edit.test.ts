@@ -41,10 +41,17 @@ describe("clip timeline", () => {
     expect(p.cuts[0].startMs).toBe(18_000);
     expect(p.annotations[0].startMs).toBe(5000);
     expect(p.transcript.words[0].t0).toBe(3500);
-    // At the end nothing moves.
+    // At the end nothing moves, not even the cut that ends exactly there.
     insertClip(p, 99, newCard(p, "Bye"));
-    expect(p.cuts[0].startMs).toBe(18_000);
+    expect(p.cuts).toEqual([{ startMs: 18_000, endMs: 19_000 }]);
     expect(totalDuration(p)).toBe(22_000);
+    // A cut running across the insertion point is split around the new clip.
+    p.cuts = [{ startMs: 12_000, endMs: 14_000 }];
+    insertClip(p, 2, newCard(p, "Middle"));
+    expect(p.cuts).toEqual([
+      { startMs: 12_000, endMs: 13_000 },
+      { startMs: 16_000, endMs: 17_000 },
+    ]);
   });
 
   it("removing a clip takes its edits with it", () => {
@@ -156,6 +163,8 @@ describe("styles", () => {
     }
     expect(p.frame.aspect).toBe("9:16");
     expect(p.captions.show).toBe(false);
+    // The last style has no caption background; the one before it must not linger.
+    expect(p.captions.background).toBeUndefined();
     expect(p.clips).toHaveLength(2);
     applyStyle(p, before);
     expect(extractStyle(p, "mine")).toEqual(before);

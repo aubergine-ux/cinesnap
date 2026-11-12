@@ -351,6 +351,12 @@ pub fn transcribe(
     if clips.is_empty() {
         bail!("there is no microphone audio to transcribe");
     }
+    // English-only models cannot detect a language (and report nonsense
+    // when asked to).
+    let english_only = model
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().ends_with(".en.bin"));
+    let language = if english_only { Some("en") } else { language };
     let total: f64 = clips.iter().map(|(s, _, _)| s.duration_ms).sum();
     let mut before = 0.0;
     let mut transcript = Transcript::default();
@@ -366,7 +372,7 @@ pub fn transcribe(
         )?;
         before += share;
         if transcript.language.is_empty() {
-            transcript.language = lang;
+            transcript.language = language.map_or(lang, str::to_owned);
         }
         transcript.words.extend(words.into_iter().map(|w| Word {
             t0: (span.start_ms + w.t0).min(span.end_ms()),

@@ -56,14 +56,30 @@ export function newId(prefix: string): string {
   return `${prefix}${Date.now().toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`;
 }
 
-/** Move everything at or after `atMs` by `deltaMs`. */
+/**
+ * Move everything at or after `atMs` by `deltaMs`. Something that merely
+ * ends at `atMs` stays where it is; a cut running across `atMs` is split so
+ * it does not swallow whatever is being inserted there.
+ */
 export function shiftFrom(p: Project, atMs: number, deltaMs: number): void {
-  const moved = (t: number) => (t >= atMs - 0.5 ? t + deltaMs : t);
-  for (const c of p.cuts) [c.startMs, c.endMs] = [moved(c.startMs), moved(c.endMs)];
-  for (const z of p.zooms) [z.startMs, z.endMs] = [moved(z.startMs), moved(z.endMs)];
-  for (const a of p.annotations) [a.startMs, a.endMs] = [moved(a.startMs), moved(a.endMs)];
+  const EPS = 0.5;
+  const moved = (t: number) => (t >= atMs - EPS ? t + deltaMs : t);
+  const cuts: Cut[] = [];
+  for (const c of p.cuts) {
+    if (c.endMs <= atMs + EPS) cuts.push(c);
+    else if (c.startMs >= atMs - EPS) cuts.push({ startMs: c.startMs + deltaMs, endMs: c.endMs + deltaMs });
+    else cuts.push({ startMs: c.startMs, endMs: atMs }, { startMs: atMs + deltaMs, endMs: c.endMs + deltaMs });
+  }
+  p.cuts = cuts.filter((c) => c.endMs - c.startMs >= 1);
+  // Zooms and annotations belong to the clip they start in.
+  for (const list of [p.zooms, p.annotations]) {
+    for (const it of list) {
+      if (it.startMs >= atMs - EPS) [it.startMs, it.endMs] = [it.startMs + deltaMs, it.endMs + deltaMs];
+      else it.endMs = Math.min(it.endMs, atMs);
+    }
+  }
   for (const k of p.webcamKeys) k.atMs = moved(k.atMs);
-  if (p.transcript) for (const w of p.transcript.words) [w.t0, w.t1] = [moved(w.t0), moved(w.t1)];
+  if (p.transcript) for (const w of p.transcript.words) if (w.t0 >= atMs - EPS) [w.t0, w.t1] = [w.t0 + deltaMs, w.t1 + deltaMs];
 }
 
 /** Put a clip on the timeline before the clip at `index`. */
@@ -271,12 +287,12 @@ export function extractStyle(p: Project, name: string): StylePreset {
 /** Apply a preset: everything about the look, nothing about the content. */
 export function applyStyle(p: Project, style: StylePreset): void {
   const s = structuredClone(style);
-  p.frame = { ...p.frame, ...s.frame };
-  p.cursor = { ...p.cursor, ...s.cursor };
-  p.theme = { ...p.theme, ...s.theme };
-  p.keystrokes = { ...p.keystrokes, ...s.keystrokes };
+  p.frame = { ...s.frame, aspect: p.frame.aspect };
+  p.cursor = s.cursor;
+  p.theme = s.theme;
+  p.keystrokes = s.keystrokes;
   // Whether captions show is content, not style.
-  p.captions = { ...p.captions, ...s.captions, show: p.captions.show };
+  p.captions = { ...s.captions, show: p.captions.show };
   p.webcam = { ...p.webcam, ...s.webcam };
 }
 

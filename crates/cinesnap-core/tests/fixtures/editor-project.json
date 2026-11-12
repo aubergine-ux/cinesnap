@@ -1,0 +1,348 @@
+{
+  "format": "cinesnap-project",
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "app": "0.1.0",
+  "source": {
+    "video": {
+      "file": "video.mp4",
+      "width": 1920,
+      "height": 1080,
+      "fps": 60,
+      "durationMs": 24000
+    },
+    "mic": {
+      "file": "mic.wav",
+      "offsetMs": 0
+    },
+    "events": {
+      "file": "events.jsonl"
+    },
+    "platform": "mock",
+    "target": "screen"
+  },
+  "crop": {
+    "x": 0,
+    "y": 0,
+    "width": 1920,
+    "height": 1080
+  },
+  "cuts": [
+    {
+      "startMs": 34000,
+      "endMs": 35000
+    }
+  ],
+  "zooms": [],
+  "autoZoom": {
+    "enabled": true,
+    "scale": 2,
+    "mergeGapMs": 2500,
+    "onTyping": true
+  },
+  "cursor": {
+    "show": true,
+    "size": 1.9,
+    "smoothing": 0.55,
+    "ripples": true,
+    "rippleColor": "#fde047",
+    "hideWhenIdleMs": 0,
+    "style": "arrow"
+  },
+  "frame": {
+    "padding": 0.07,
+    "radius": 22,
+    "shadow": 0.5,
+    "background": {
+      "type": "gradient",
+      "from": "#f97316",
+      "to": "#ec4899",
+      "angle": 135
+    },
+    "aspect": "16:9"
+  },
+  "webcam": {
+    "show": true,
+    "corner": "top-left",
+    "x": 0.12,
+    "y": 0.2,
+    "size": 0.2,
+    "shape": "circle"
+  },
+  "export": {
+    "format": "mp4",
+    "preset": "shorts",
+    "fps": 60,
+    "quality": "medium"
+  },
+  "clips": [
+    {
+      "id": "title",
+      "kind": "card",
+      "transition": {
+        "type": "cut",
+        "durationMs": 500
+      },
+      "durationMs": 3000,
+      "title": "Cinesnap",
+      "subtitle": "Finish the whole video here",
+      "titleColor": "#ffffff",
+      "subtitleColor": "#ffffffb3",
+      "titleSize": 96,
+      "align": "center"
+    },
+    {
+      "id": "main",
+      "kind": "recording",
+      "transition": {
+        "type": "cut",
+        "durationMs": 500
+      },
+      "dir": "",
+      "source": {
+        "video": {
+          "file": "video.mp4",
+          "width": 1920,
+          "height": 1080,
+          "fps": 60,
+          "durationMs": 24000
+        },
+        "mic": {
+          "file": "mic.wav",
+          "offsetMs": 0
+        },
+        "events": {
+          "file": "events.jsonl"
+        },
+        "platform": "mock",
+        "target": "screen",
+        "webcam": {
+          "file": "webcam.mp4",
+          "offsetMs": 120,
+          "width": 1280,
+          "height": 720
+        }
+      },
+      "crop": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1080
+      }
+    },
+    {
+      "id": "clip1",
+      "kind": "recording",
+      "transition": {
+        "type": "zoom",
+        "durationMs": 600
+      },
+      "dir": "clips/clip1",
+      "source": {
+        "video": {
+          "file": "video.mp4",
+          "width": 1280,
+          "height": 720,
+          "fps": 30,
+          "durationMs": 8000
+        },
+        "mic": {
+          "file": "mic.wav",
+          "offsetMs": 0
+        },
+        "events": {
+          "file": "events.jsonl"
+        },
+        "platform": "mock",
+        "target": "screen",
+        "webcam": {
+          "file": "webcam.mp4",
+          "offsetMs": 120,
+          "width": 1280,
+          "height": 720
+        }
+      },
+      "crop": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720
+      }
+    },
+    {
+      "id": "outro",
+      "kind": "card",
+      "transition": {
+        "type": "crossfade",
+        "durationMs": 500
+      },
+      "durationMs": 3000,
+      "title": "Thanks for watching",
+      "subtitle": "",
+      "titleColor": "#ffffff",
+      "subtitleColor": "#ffffffb3",
+      "titleSize": 96,
+      "align": "left",
+      "font": "PT Serif",
+      "background": {
+        "type": "solid",
+        "color": "#101116"
+      }
+    }
+  ],
+  "annotations": [
+    {
+      "id": "a0",
+      "startMs": 5000,
+      "endMs": 8000,
+      "type": "text",
+      "x": 691.1999999999999,
+      "y": 453.59999999999997,
+      "text": "Text",
+      "size": 44,
+      "color": "#ffffff",
+      "background": "#14151af0",
+      "bold": true
+    },
+    {
+      "id": "a1",
+      "startMs": 6000,
+      "endMs": 9000,
+      "type": "arrow",
+      "x1": 672,
+      "y1": 648,
+      "x2": 1056,
+      "y2": 486,
+      "color": "#6d5dfc",
+      "width": 8
+    },
+    {
+      "id": "a2",
+      "startMs": 7000,
+      "endMs": 10000,
+      "type": "box",
+      "x": 672,
+      "y": 421.2,
+      "width": 576,
+      "height": 237.6,
+      "color": "#6d5dfc",
+      "stroke": 6,
+      "radius": 8
+    },
+    {
+      "id": "a3",
+      "startMs": 8000,
+      "endMs": 11000,
+      "type": "highlight",
+      "x": 672,
+      "y": 421.2,
+      "width": 576,
+      "height": 95.04,
+      "color": "#ffe14a",
+      "opacity": 0.7
+    },
+    {
+      "id": "a4",
+      "startMs": 9000,
+      "endMs": 12000,
+      "type": "spotlight",
+      "x": 672,
+      "y": 421.2,
+      "width": 576,
+      "height": 237.6,
+      "dim": 0.65,
+      "ellipse": false
+    },
+    {
+      "id": "a5",
+      "startMs": 10000,
+      "endMs": 13000,
+      "type": "blur",
+      "x": 672,
+      "y": 421.2,
+      "width": 576,
+      "height": 237.6,
+      "strength": 14
+    }
+  ],
+  "keystrokes": {
+    "show": true,
+    "position": "bottom",
+    "size": 1.15,
+    "holdMs": 1500
+  },
+  "webcamKeys": [
+    {
+      "id": "w1",
+      "atMs": 6000,
+      "x": 0.8,
+      "y": 0.8,
+      "size": 0.25,
+      "show": true
+    },
+    {
+      "id": "w2",
+      "atMs": 12000,
+      "x": 0.8,
+      "y": 0.8,
+      "size": 0.25,
+      "show": false
+    }
+  ],
+  "theme": {
+    "font": "Poppins",
+    "accent": "#ec4899",
+    "text": "#ffffff",
+    "surface": "#1a1020f0"
+  },
+  "captions": {
+    "show": true,
+    "style": "pop",
+    "y": 0.8,
+    "size": 1.2,
+    "color": "#ffffff",
+    "highlight": "#fde047",
+    "maxChars": 24,
+    "uppercase": true
+  },
+  "audio": {
+    "micVolume": 1.2,
+    "denoise": 0.5,
+    "normalize": true,
+    "eq": {
+      "enabled": true,
+      "lowCutHz": 90,
+      "bassDb": -1,
+      "presenceDb": 4,
+      "airDb": 2
+    },
+    "music": {
+      "source": "builtin:open-sky",
+      "volume": 0.3,
+      "duck": true,
+      "duckDb": -12,
+      "fadeInMs": 500,
+      "fadeOutMs": 2000
+    }
+  },
+  "transcript": {
+    "language": "en",
+    "words": [
+      {
+        "t0": 3500,
+        "t1": 3900,
+        "text": "Hello"
+      },
+      {
+        "t0": 4000,
+        "t1": 4300,
+        "text": "um"
+      },
+      {
+        "t0": 4400,
+        "t1": 5000,
+        "text": "world."
+      }
+    ]
+  }
+}

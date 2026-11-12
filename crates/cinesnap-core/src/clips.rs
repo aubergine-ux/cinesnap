@@ -122,23 +122,58 @@ pub fn append(project: &mut Project, imported: Imported) {
 }
 
 /// Move everything on the timeline at or after `at_ms` by `delta_ms`.
+/// Something that merely ends at `at_ms` stays where it is; a cut running
+/// across `at_ms` is split so it does not swallow whatever is being
+/// inserted there.
 pub fn shift_from(project: &mut Project, at_ms: f64, delta_ms: f64) {
-    let moved = |t: f64| if t >= at_ms - 0.5 { t + delta_ms } else { t };
-    for c in &mut project.cuts {
-        (c.start_ms, c.end_ms) = (moved(c.start_ms), moved(c.end_ms));
+    const EPS: f64 = 0.5;
+    let moved = |t: f64| if t >= at_ms - EPS { t + delta_ms } else { t };
+    let mut cuts = Vec::with_capacity(project.cuts.len());
+    for c in &project.cuts {
+        if c.end_ms <= at_ms + EPS {
+            cuts.push(*c);
+        } else if c.start_ms >= at_ms - EPS {
+            cuts.push(Cut {
+                start_ms: c.start_ms + delta_ms,
+                end_ms: c.end_ms + delta_ms,
+            });
+        } else {
+            cuts.push(Cut {
+                start_ms: c.start_ms,
+                end_ms: at_ms,
+            });
+            cuts.push(Cut {
+                start_ms: at_ms + delta_ms,
+                end_ms: c.end_ms + delta_ms,
+            });
+        }
     }
+    cuts.retain(|c| c.end_ms - c.start_ms >= 1.0);
+    project.cuts = cuts;
+    // Zooms and annotations belong to the clip they start in.
+    let range = |start: &mut f64, end: &mut f64| {
+        if *start >= at_ms - EPS {
+            *start += delta_ms;
+            *end += delta_ms;
+        } else {
+            *end = end.min(at_ms);
+        }
+    };
     for z in &mut project.zooms {
-        (z.start_ms, z.end_ms) = (moved(z.start_ms), moved(z.end_ms));
+        range(&mut z.start_ms, &mut z.end_ms);
     }
     for a in &mut project.annotations {
-        (a.start_ms, a.end_ms) = (moved(a.start_ms), moved(a.end_ms));
+        range(&mut a.start_ms, &mut a.end_ms);
     }
     for k in &mut project.webcam_keys {
         k.at_ms = moved(k.at_ms);
     }
     if let Some(t) = &mut project.transcript {
         for w in &mut t.words {
-            (w.t0, w.t1) = (moved(w.t0), moved(w.t1));
+            if w.t0 >= at_ms - EPS {
+                w.t0 += delta_ms;
+                w.t1 += delta_ms;
+            }
         }
     }
 }
@@ -253,6 +288,41 @@ mod tests {
             }
         );
         assert_eq!(p.spans()[1].start_ms, 2000.0);
+        // A card at the very end does not stretch the cut that ends there,
+        // and one between the recordings splits a cut that spans the join.
+        let outro = |id: &str| Clip {
+            id: id.into(),
+            transition: Transition::default(),
+            body: ClipBody::Card(crate::project::Card::default()),
+        };
+        insert(&mut p, 99, outro("outro"));
+        assert_eq!(
+            p.cuts[1],
+            Cut {
+                start_ms: 8500.0,
+                end_ms: 9000.0
+            }
+        );
+        assert_eq!(p.duration_ms(), 12_000.0);
+        p.cuts[0].end_ms = 6500.0;
+        insert(&mut p, 2, outro("middle"));
+        assert_eq!(
+            p.cuts,
+            vec![
+                Cut {
+                    start_ms: 5500.0,
+                    end_ms: 6000.0
+                },
+                Cut {
+                    start_ms: 9000.0,
+                    end_ms: 9500.0
+                },
+                Cut {
+                    start_ms: 11_500.0,
+                    end_ms: 12_000.0
+                },
+            ]
+        );
 
         // Not a recording, or one with its video missing.
         assert!(import_recording(&a, &p, tmp.path()).is_err());

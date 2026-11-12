@@ -651,9 +651,11 @@ pub struct CaptionStyle {
     pub color: String,
     /// Colour of the word being spoken (`karaoke`).
     pub highlight: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Absent means no background (unlike the other fields, which fall
+    /// back to their defaults).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
     /// Longest caption line, in characters.
     pub max_chars: usize,
