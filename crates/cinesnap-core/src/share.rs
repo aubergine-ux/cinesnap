@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::export::Cancelled;
+use crate::transcribe::NETWORK_PATIENCE;
 
 /// What the server answers after an upload.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -97,6 +98,9 @@ pub fn upload(
     let result = ureq::post(&url)
         .config()
         .http_status_as_error(false)
+        .timeout_connect(Some(NETWORK_PATIENCE))
+        .timeout_per_read(Some(NETWORK_PATIENCE))
+        .timeout_per_write(Some(NETWORK_PATIENCE))
         .build()
         .header("Authorization", &format!("Bearer {}", token.trim()))
         .header("Content-Type", kind)
@@ -216,6 +220,12 @@ mod tests {
         let err = upload(&addr, "x", &file, "t", &mut |_| {}, &cancel).unwrap_err();
         assert!(err.to_string().contains("disk full"), "{err:#}");
         server.join().unwrap();
+
+        // Cancelled before it starts: nothing is sent.
+        let (addr, _server) = serve("201 Created", "{}");
+        let stop = AtomicBool::new(true);
+        let err = upload(&addr, "x", &file, "t", &mut |_| {}, &stop).unwrap_err();
+        assert!(err.is::<Cancelled>(), "{err:#}");
 
         // Nothing listening, an empty file, a file of the wrong kind.
         assert!(upload("http://127.0.0.1:1", "x", &file, "t", &mut |_| {}, &cancel).is_err());

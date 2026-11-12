@@ -77,6 +77,9 @@ pub fn available() -> bool {
     cfg!(feature = "whisper")
 }
 
+/// How long a connection may stay silent before it counts as dead.
+pub const NETWORK_PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Download a model into `models_dir` unless it is already there.
 /// `progress` receives 0..1.
 pub fn download_model(
@@ -92,7 +95,13 @@ pub fn download_model(
     }
     std::fs::create_dir_all(models_dir)?;
     let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{id}.bin");
+    // No limit on the whole download (models are large and connections
+    // slow), but a connection that goes quiet is given up on.
     let mut response = ureq::get(&url)
+        .config()
+        .timeout_connect(Some(NETWORK_PATIENCE))
+        .timeout_per_read(Some(NETWORK_PATIENCE))
+        .build()
         .call()
         .with_context(|| format!("downloading the {} model", info.label))?;
     let total = response
