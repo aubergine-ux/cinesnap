@@ -373,7 +373,12 @@ fn headless_record(args: &[String]) -> anyhow::Result<()> {
     let dir = dir.context(
         "usage: cinesnap record <dir.cinesnap> [--seconds N] [--fps N] [--mic ID] [--webcam ID]",
     )?;
+    anyhow::ensure!(
+        seconds.is_finite() && seconds > 0.0 && seconds <= 86_400.0,
+        "--seconds must be a positive number"
+    );
     let ffmpeg = ffmpeg::locate(None).context("ffmpeg not found")?;
+    let (wants_mic, wants_webcam) = (mic.is_some(), webcam.is_some());
     let options = RecordOptions {
         target: recorder::Target {
             kind: "screen".into(),
@@ -388,6 +393,13 @@ fn headless_record(args: &[String]) -> anyhow::Result<()> {
     eprintln!("recording for {seconds} s…");
     std::thread::sleep(Duration::from_secs_f64(seconds));
     let dir = recording.stop(&ffmpeg)?;
+    let source = Project::load(&dir)?.source;
+    if wants_mic && source.mic.is_none() {
+        eprintln!("warning: the microphone delivered no audio and was left out");
+    }
+    if wants_webcam && source.webcam.is_none() {
+        eprintln!("warning: the webcam delivered no video and was left out");
+    }
     println!("{}", dir.display());
     Ok(())
 }

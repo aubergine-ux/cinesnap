@@ -113,6 +113,17 @@ impl Grab {
     }
 }
 
+/// A capture that is dropped without `stop` (an error or a panic further up)
+/// must not leave ffmpeg recording in the background.
+impl Drop for Grab {
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 /// A screen (or the part of the desktop) to capture, in desktop pixels.
 /// Which fields are used depends on the platform's grabber.
 #[allow(dead_code)]
