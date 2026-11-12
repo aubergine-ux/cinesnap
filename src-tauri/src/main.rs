@@ -4,16 +4,21 @@ mod devices;
 mod media;
 mod recorder;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cinesnap_core::clips::{self, Imported};
 use cinesnap_core::events::EventLog;
 use cinesnap_core::export::{export, Cancelled, ExportOptions};
 use cinesnap_core::ffmpeg::{self, Encoder};
-use cinesnap_core::motion::{self, MotionTracks};
-use cinesnap_core::project::{Project, Zoom, PROJECT_FILE};
+use cinesnap_core::motion::{self, Kept, MotionTracks};
+use cinesnap_core::project::{Project, Transcript, Zoom, PROJECT_FILE};
+use cinesnap_core::share::{self, Shared};
+use cinesnap_core::transcript::{self, Suggestion};
+use cinesnap_core::{audio, music, presets, transcribe};
 use recorder::{RecordOptions, Recording};
 use serde::Serialize;
 use serde_json::json;
@@ -26,10 +31,16 @@ struct AppState {
     starting: AtomicBool,
     encoder: Mutex<Option<Encoder>>,
     export_cancel: Arc<AtomicBool>,
-    /// The event log of the project being edited (it never changes on disk).
-    log: Mutex<Option<(PathBuf, Arc<EventLog>)>>,
+    /// The event logs of the project being edited, with the clips they
+    /// belong to (logs never change on disk).
+    log: Mutex<Option<LogCache>>,
+    /// Cancel flags of running background jobs, by kind.
+    jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
     media_base: Option<String>,
 }
+
+/// Bundle path, clip ids, and the logs of those clips.
+type LogCache = (PathBuf, Vec<String>, Arc<Vec<EventLog>>);
 
 type CmdResult<T> = Result<T, String>;
 
@@ -62,20 +73,70 @@ fn recordings_dir(app: &AppHandle) -> CmdResult<PathBuf> {
     Ok(base.join("Cinesnap"))
 }
 
-fn event_log(state: &AppState, dir: &Path, project: &Project) -> Arc<EventLog> {
+fn event_logs(state: &AppState, dir: &Path, project: &Project) -> Arc<Vec<EventLog>> {
+    let ids: Vec<String> = project.clips.iter().map(|c| c.id.clone()).collect();
     let mut cache = state.log.lock().unwrap();
-    if let Some((path, log)) = cache.as_ref() {
-        if path == dir {
-            return log.clone();
+    if let Some((path, cached, logs)) = cache.as_ref() {
+        if path == dir && *cached == ids {
+            return logs.clone();
         }
     }
-    let log = Arc::new(
-        EventLog::load(&project.events_path(dir)).unwrap_or_else(|_| {
-            EventLog::empty(project.source.video.width, project.source.video.height)
-        }),
-    );
-    *cache = Some((dir.to_owned(), log.clone()));
-    log
+    let logs = Arc::new(motion::load_logs(dir, project));
+    *cache = Some((dir.to_owned(), ids, logs.clone()));
+    logs
+}
+
+/// Start a background job of the given kind, cancelling one of the same
+/// kind that is still running. Returns its cancel flag.
+fn start_job(state: &AppState, kind: &str) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    if let Some(old) = state
+        .jobs
+        .lock()
+        .unwrap()
+        .insert(kind.to_owned(), flag.clone())
+    {
+        old.store(true, Ordering::SeqCst);
+    }
+    flag
+}
+
+/// Progress reporter for a job: emits `job://progress` at most ~15 times a
+/// second, and always for the final value.
+fn job_progress<'a>(app: &'a AppHandle, kind: &'a str, stage: &'a str) -> impl FnMut(f64) + 'a {
+    let mut last = Instant::now() - Duration::from_secs(1);
+    move |fraction: f64| {
+        if fraction >= 1.0 || last.elapsed() > Duration::from_millis(66) {
+            last = Instant::now();
+            let _ = app.emit(
+                "job://progress",
+                json!({ "job": kind, "stage": stage, "fraction": fraction }),
+            );
+        }
+    }
+}
+
+fn job_error(e: anyhow::Error) -> String {
+    if e.is::<Cancelled>() {
+        "cancelled".to_owned()
+    } else {
+        err(e)
+    }
+}
+
+fn read_json(app: &AppHandle, file: &str) -> serde_json::Value {
+    data_dir(app)
+        .and_then(|d| std::fs::read_to_string(d.join(file)).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn write_json(app: &AppHandle, file: &str, value: &serde_json::Value) -> CmdResult<()> {
+    let dir = data_dir(app).ok_or("no data directory")?;
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let tmp = dir.join(format!("{file}.tmp"));
+    std::fs::write(&tmp, serde_json::to_vec_pretty(value).map_err(err)?).map_err(err)?;
+    std::fs::rename(&tmp, dir.join(file)).map_err(err)
 }
 
 #[derive(Serialize)]
@@ -241,8 +302,8 @@ fn list_recent(app: AppHandle) -> Vec<Recent> {
             Some(Recent {
                 name: p.file_stem()?.to_string_lossy().into_owned(),
                 path: p.display().to_string(),
+                duration_ms: project.duration_ms(),
                 created_at: project.created_at,
-                duration_ms: project.source.video.duration_ms,
             })
         })
         .collect();
@@ -285,13 +346,250 @@ fn delete_project(state: State<AppState>, path: String) -> CmdResult<()> {
 #[tauri::command(async)]
 fn auto_zoom(state: State<AppState>, path: String, mut project: Project) -> Vec<Zoom> {
     project.sanitize();
-    motion::auto_zoom(&project, &event_log(&state, Path::new(&path), &project))
+    motion::auto_zoom(&project, &event_logs(&state, Path::new(&path), &project))
 }
 
 #[tauri::command(async)]
 fn compute_motion(state: State<AppState>, path: String, mut project: Project) -> MotionTracks {
     project.sanitize();
-    motion::compute_motion(&project, &event_log(&state, Path::new(&path), &project))
+    motion::compute_motion(&project, &event_logs(&state, Path::new(&path), &project))
+}
+
+/// Save for the last time and drop the files of clips that were removed.
+#[tauri::command(async)]
+fn close_project(path: String, mut project: Project) -> CmdResult<()> {
+    project.sanitize();
+    let dir = Path::new(&path);
+    project.save(dir).map_err(err)?;
+    clips::remove_orphans(dir, &project);
+    Ok(())
+}
+
+/// Copy another recording into this project as a new clip.
+#[tauri::command(async)]
+fn import_clip(path: String, project: Project, from: String) -> CmdResult<Imported> {
+    let (dir, from) = (Path::new(&path), Path::new(&from));
+    if std::fs::canonicalize(dir).ok() == std::fs::canonicalize(from).ok() {
+        return Err("that is the recording you are editing".into());
+    }
+    clips::import_recording(dir, &project, from).map_err(err)
+}
+
+#[tauri::command]
+fn export_presets() -> &'static [presets::ExportPreset] {
+    &presets::PRESETS
+}
+
+#[tauri::command]
+fn music_tracks() -> &'static [music::TrackInfo] {
+    music::tracks()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeechModel {
+    #[serde(flatten)]
+    info: transcribe::ModelInfo,
+    downloaded: bool,
+}
+
+#[derive(Serialize)]
+struct Speech {
+    available: bool,
+    models: Vec<SpeechModel>,
+}
+
+fn models_dir(app: &AppHandle) -> CmdResult<PathBuf> {
+    Ok(data_dir(app).ok_or("no data directory")?.join("models"))
+}
+
+#[tauri::command(async)]
+fn speech_models(app: AppHandle) -> Speech {
+    let dir = models_dir(&app).ok();
+    Speech {
+        available: transcribe::available(),
+        models: transcribe::MODELS
+            .iter()
+            .map(|m| SpeechModel {
+                info: *m,
+                downloaded: dir
+                    .as_ref()
+                    .is_some_and(|d| transcribe::model_path(d, m.id).is_file()),
+            })
+            .collect(),
+    }
+}
+
+/// Transcribe the project's speech on this machine. Downloads the model
+/// first if it is not there yet (the only step that uses the network).
+#[tauri::command(async)]
+fn transcribe_project(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+    project: Project,
+    model: String,
+    language: Option<String>,
+) -> CmdResult<Transcript> {
+    let ffmpeg = find_ffmpeg(&app)?;
+    let cancel = start_job(&state, "transcribe");
+    let models = models_dir(&app)?;
+    let file = transcribe::download_model(
+        &models,
+        &model,
+        &mut job_progress(&app, "transcribe", "download"),
+        &cancel,
+    )
+    .map_err(job_error)?;
+    transcribe::transcribe(
+        Path::new(&path),
+        &project,
+        &ffmpeg,
+        &file,
+        language.as_deref().filter(|l| !l.is_empty()),
+        &mut job_progress(&app, "transcribe", "listen"),
+        &cancel,
+    )
+    .map_err(job_error)
+}
+
+/// Build (or find) the soundtrack for the editor preview. Returns its path,
+/// or nothing when the project is silent.
+#[tauri::command(async)]
+fn audio_preview(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+    mut project: Project,
+) -> CmdResult<Option<String>> {
+    project.sanitize();
+    let ffmpeg = find_ffmpeg(&app)?;
+    let cancel = start_job(&state, "audio");
+    audio::preview_mix(
+        Path::new(&path),
+        &project,
+        &ffmpeg,
+        &mut job_progress(&app, "audio", "mix"),
+        &cancel,
+    )
+    .map(|p| p.map(|p| p.display().to_string()))
+    .map_err(job_error)
+}
+
+/// Filler words and long silences that could be cut, for review.
+#[tauri::command(async)]
+fn suggest_cuts(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+    mut project: Project,
+    fillers: bool,
+    silences: bool,
+    min_silence_ms: f64,
+) -> CmdResult<Vec<Suggestion>> {
+    project.sanitize();
+    let kept = Kept::new(project.duration_ms(), &project.cuts);
+    let mut out = Vec::new();
+    if fillers {
+        if let Some(t) = &project.transcript {
+            out.extend(transcript::find_fillers(&t.words, &kept));
+        }
+    }
+    if silences {
+        let ffmpeg = find_ffmpeg(&app)?;
+        let cancel = start_job(&state, "silence");
+        let min = min_silence_ms.clamp(300.0, 60_000.0);
+        let found = audio::detect_silences(Path::new(&path), &project, &ffmpeg, min, &cancel)
+            .map_err(job_error)?;
+        out.extend(transcript::silence_cuts(&found, &kept, min, 200.0));
+    }
+    out.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
+    Ok(out)
+}
+
+#[tauri::command(async)]
+fn export_captions(mut project: Project, out_path: String) -> CmdResult<usize> {
+    project.sanitize();
+    let words = project
+        .transcript
+        .as_ref()
+        .map(|t| t.words.as_slice())
+        .ok_or("there is no transcript yet")?;
+    let kept = Kept::new(project.duration_ms(), &project.cuts);
+    let lines = transcript::caption_lines(words, &kept, project.captions.max_chars);
+    let text = if out_path.to_ascii_lowercase().ends_with(".vtt") {
+        transcript::vtt(&lines)
+    } else {
+        transcript::srt(&lines)
+    };
+    std::fs::write(&out_path, text).map_err(err)?;
+    Ok(lines.len())
+}
+
+/// Saved looks, shared by every project on this machine.
+#[tauri::command(async)]
+fn list_styles(app: AppHandle) -> serde_json::Value {
+    match read_json(&app, "styles.json") {
+        serde_json::Value::Array(a) => serde_json::Value::Array(a),
+        _ => json!([]),
+    }
+}
+
+#[tauri::command(async)]
+fn save_styles(app: AppHandle, styles: serde_json::Value) -> CmdResult<()> {
+    if !styles.is_array() {
+        return Err("styles must be a list".into());
+    }
+    write_json(&app, "styles.json", &styles)
+}
+
+#[tauri::command(async)]
+fn get_settings(app: AppHandle) -> serde_json::Value {
+    match read_json(&app, "settings.json") {
+        serde_json::Value::Object(o) => serde_json::Value::Object(o),
+        _ => json!({}),
+    }
+}
+
+#[tauri::command(async)]
+fn save_settings(app: AppHandle, settings: serde_json::Value) -> CmdResult<()> {
+    if !settings.is_object() {
+        return Err("settings must be an object".into());
+    }
+    write_json(&app, "settings.json", &settings)
+}
+
+/// Upload an exported file to the share server from the settings.
+#[tauri::command(async)]
+fn share_video(
+    app: AppHandle,
+    state: State<AppState>,
+    file: String,
+    title: String,
+) -> CmdResult<Shared> {
+    let settings = get_settings(app.clone());
+    let field = |k: &str| settings[k].as_str().unwrap_or_default().trim().to_owned();
+    let (server, token) = (field("shareServer"), field("shareToken"));
+    if server.is_empty() || token.is_empty() {
+        return Err("set the share server address and token first".into());
+    }
+    let cancel = start_job(&state, "share");
+    share::upload(
+        &server,
+        &token,
+        Path::new(&file),
+        &title,
+        &mut job_progress(&app, "share", "upload"),
+        &cancel,
+    )
+    .map_err(job_error)
+}
+
+#[tauri::command]
+fn cancel_job(state: State<AppState>, job: String) {
+    if let Some(flag) = state.jobs.lock().unwrap().get(&job) {
+        flag.store(true, Ordering::SeqCst);
+    }
 }
 
 #[tauri::command(async)]
@@ -388,6 +686,7 @@ fn headless_record(args: &[String]) -> anyhow::Result<()> {
         mic,
         webcam,
         fps,
+        shortcuts: true,
     };
     let recording = Recording::start(&ffmpeg, Encoder::detect(&ffmpeg), &dir, &options)?;
     eprintln!("recording for {seconds} s…");
@@ -512,6 +811,21 @@ fn main() {
             delete_project,
             auto_zoom,
             compute_motion,
+            close_project,
+            import_clip,
+            export_presets,
+            music_tracks,
+            speech_models,
+            transcribe_project,
+            audio_preview,
+            suggest_cuts,
+            export_captions,
+            list_styles,
+            save_styles,
+            get_settings,
+            save_settings,
+            share_video,
+            cancel_job,
             export_video,
             cancel_export,
             client_log,

@@ -34,6 +34,14 @@ pub struct RecordOptions {
     pub webcam: Option<String>,
     #[serde(default = "default_fps")]
     pub fps: u32,
+    /// Label shortcuts (Ctrl+K, Enter) in the event log for the keystroke
+    /// overlay. Typed text is never recorded either way.
+    #[serde(default = "yes")]
+    pub shortcuts: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn default_fps() -> u32 {
@@ -117,7 +125,7 @@ impl Recording {
             let t0 = capture.wait_first_frame(Duration::from_secs(30))?;
             let buttons = evdev_input::available();
             if buttons {
-                evdev_input::track(&mut tracker, sink.clone(), capture.cursor());
+                evdev_input::track(&mut tracker, sink.clone(), capture.cursor(), opts.shortcuts);
             }
             let cursor = if capture.cursor_metadata {
                 "metadata"
@@ -195,6 +203,7 @@ impl Recording {
                 origin: screen.origin,
                 scale: screen.scale,
             },
+            opts.shortcuts,
         );
 
         Ok(Self {
@@ -373,7 +382,7 @@ impl Recording {
             }
         }
         project.sanitize();
-        project.zooms = auto_zoom(&project, &EventLog { header, events });
+        project.zooms = auto_zoom(&project, &[EventLog { header, events }]);
         project.save(&dir)?;
         Ok(dir)
     }
