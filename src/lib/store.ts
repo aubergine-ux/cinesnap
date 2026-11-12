@@ -143,6 +143,9 @@ export const useStore = create<State>((set, get) => {
       await get().refreshHome();
       // Browser demo: /#demo opens the sample project straight away.
       if (!isTauri && window.location.hash === "#demo" && get().recent[0]) await get().openProject(get().recent[0].path);
+      // `cinesnap path/to/recording.cinesnap` opens straight into the editor.
+      const initial = isTauri ? await api.initialProject().catch(() => null) : null;
+      if (initial) await get().openProject(initial);
     },
 
     refreshHome: async () => {

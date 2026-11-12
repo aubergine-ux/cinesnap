@@ -131,6 +131,8 @@ export interface Capabilities {
   ffmpeg: { path: string; version: string } | null;
   encoder: string;
   notes: string[];
+  /** Base URL of the backend's local media server (Linux); null when asset URLs work. */
+  mediaBase?: string | null;
 }
 
 export interface ScreenInfo extends Rect {

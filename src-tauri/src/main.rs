@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod devices;
+mod media;
 mod recorder;
 
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ struct AppState {
     export_cancel: Arc<AtomicBool>,
     /// The event log of the project being edited (it never changes on disk).
     log: Mutex<Option<(PathBuf, Arc<EventLog>)>>,
+    media_base: Option<String>,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -83,6 +85,7 @@ struct FfmpegInfo {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Capabilities {
     platform: &'static str,
     cursor: &'static str,
@@ -90,6 +93,8 @@ struct Capabilities {
     ffmpeg: Option<FfmpegInfo>,
     encoder: String,
     notes: Vec<String>,
+    /// Base URL of the loopback media server, where one is needed.
+    media_base: Option<String>,
 }
 
 #[tauri::command(async)]
@@ -109,6 +114,7 @@ fn get_capabilities(app: AppHandle, state: State<AppState>) -> Capabilities {
             path: p.display().to_string(),
         }),
         notes,
+        media_base: state.media_base.clone(),
     }
 }
 
@@ -244,6 +250,16 @@ fn list_recent(app: AppHandle) -> Vec<Recent> {
     list
 }
 
+/// A recording passed on the command line (`cinesnap demo.cinesnap`).
+#[tauri::command]
+fn initial_project() -> Option<String> {
+    let arg = std::env::args().nth(1)?;
+    let dir = std::fs::canonicalize(arg).ok()?;
+    dir.join(PROJECT_FILE)
+        .is_file()
+        .then(|| dir.display().to_string())
+}
+
 #[tauri::command(async)]
 fn open_project(path: String) -> CmdResult<Project> {
     Project::load(Path::new(&path)).map_err(err)
@@ -308,6 +324,13 @@ fn export_video(
             err(e)
         }
     })
+}
+
+/// Diagnostics from the frontend (media errors), shown when the app is
+/// started from a terminal.
+#[tauri::command]
+fn client_log(message: String) {
+    eprintln!("ui: {message}");
 }
 
 #[tauri::command]
@@ -384,7 +407,15 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
+        .manage(AppState {
+            // GStreamer (behind WebKitGTK's <video>) cannot read asset:// URLs.
+            media_base: if cfg!(target_os = "linux") {
+                media::serve()
+            } else {
+                None
+            },
+            ..Default::default()
+        })
         .on_window_event(|window, event| match event {
             WindowEvent::Focused(true) => {
                 let state = window.state::<AppState>();
@@ -410,6 +441,7 @@ fn main() {
             stop_recording,
             cancel_recording,
             list_recent,
+            initial_project,
             open_project,
             save_project,
             delete_project,
@@ -417,6 +449,7 @@ fn main() {
             compute_motion,
             export_video,
             cancel_export,
+            client_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Cinesnap");

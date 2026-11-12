@@ -1,6 +1,6 @@
 // Drives playback in OUTPUT time and keeps the media elements in step with it.
 
-import { isTauri, mediaUrl } from "../lib/api";
+import { api, isTauri, mediaUrl } from "../lib/api";
 import { mockSourceCanvas } from "../lib/mock";
 import { useStore } from "../lib/store";
 import type { MotionTracks, Project } from "../lib/types";
@@ -69,6 +69,10 @@ export class Player {
   private watch(v: FrameCallbackVideo) {
     const mark = () => (this.dirty = true);
     for (const ev of ["seeked", "loadeddata", "canplay", "timeupdate"]) v.addEventListener(ev, mark);
+    // Surface decode problems (a missing system codec, usually) in the
+    // backend log, where they can be found when the preview stays black.
+    v.addEventListener("loadedmetadata", () => api.clientLog(`video ready ${v.videoWidth}x${v.videoHeight} ${v.duration.toFixed(2)}s`));
+    v.addEventListener("error", () => api.clientLog(`video error ${v.error?.code ?? "?"}: ${v.error?.message ?? ""}`));
     if (v.requestVideoFrameCallback) {
       const loop = () => {
         if (this.disposed) return;

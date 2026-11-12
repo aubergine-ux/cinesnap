@@ -37,13 +37,20 @@ export function on<T>(event: string, cb: (payload: T) => void): () => void {
   };
 }
 
+let mediaBase: string | null = null;
+
 export const api = {
-  getCapabilities: () => call<Capabilities>("get_capabilities"),
+  getCapabilities: () =>
+    call<Capabilities>("get_capabilities").then((caps) => {
+      mediaBase = caps.mediaBase ?? null;
+      return caps;
+    }),
   downloadFfmpeg: () => call<void>("download_ffmpeg"),
   listSources: () => call<Sources>("list_sources"),
   startRecording: (options: RecordingOptions) => call<void>("start_recording", { options }),
   stopRecording: () => call<string>("stop_recording"),
   cancelRecording: () => call<void>("cancel_recording"),
+  initialProject: () => call<string | null>("initial_project"),
   listRecent: () => call<RecentProject[]>("list_recent"),
   openProject: (path: string) => call<Project>("open_project", { path }),
   saveProject: (path: string, project: Project) => call<void>("save_project", { path, project }),
@@ -52,6 +59,8 @@ export const api = {
   computeMotion: (path: string, project: Project) => call<MotionTracks>("compute_motion", { path, project }),
   exportVideo: (path: string, project: Project, outPath: string) => call<void>("export_video", { path, project, outPath }),
   cancelExport: () => call<void>("cancel_export"),
+  /** Write a diagnostic line to the backend log. */
+  clientLog: (message: string) => void (isTauri ? invoke("client_log", { message }).catch(() => {}) : undefined),
   onFfmpegProgress: (cb: (p: { fraction: number }) => void) => on("ffmpeg://progress", cb),
   onRecordingTick: (cb: (p: { elapsedMs: number }) => void) => on("recording://tick", cb),
   onExportProgress: (cb: (p: ExportProgress) => void) => on("export://progress", cb),
@@ -61,7 +70,10 @@ export const api = {
 export function mediaUrl(path: string, file?: string): string | null {
   if (!isTauri) return null;
   const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
-  return convertFileSrc(file ? `${path}${sep}${file}` : path);
+  const full = file ? `${path}${sep}${file}` : path;
+  // WebKitGTK cannot play video from the asset protocol; there the backend
+  // serves media over loopback HTTP instead.
+  return mediaBase ? `${mediaBase}/${encodeURIComponent(full)}` : convertFileSrc(full);
 }
 
 export async function pickSavePath(defaultName: string, ext: string): Promise<string | null> {
