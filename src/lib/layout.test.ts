@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aspectRatio, clampCentre, coverRect, fitSize, frameRect, gradientLine, mapPoint, outputFps, outputSize, unitScale, viewRect, webcamRect } from "./layout";
+import { aspectRatio, clampCentre, coverRect, fitSize, frameRect, gradientLine, mapPoint, outputFps, outputSize, unitScale, viewRect, webcamBox, cornerCentre } from "./layout";
 import type { ExportSettings } from "./types";
 
 const crop = { x: 0, y: 0, width: 2560, height: 1440 };
@@ -80,13 +80,39 @@ describe("helpers", () => {
     expect(unitScale(3840, 2160)).toBe(2);
   });
   it("places the webcam in a corner", () => {
-    const b = webcamRect(1920, 1080, 0.2, "bottom-right");
+    const at = (corner: "bottom-right" | "top-left") => {
+      const c = cornerCentre(corner, 0.2, 16 / 9);
+      return webcamBox(1920, 1080, c.x, c.y, 0.2, 1);
+    };
+    const b = at("bottom-right");
     expect(b.w).toBeCloseTo(216);
     expect(b.x).toBeCloseTo(1920 - 32.4 - 216);
     expect(b.y).toBeCloseTo(1080 - 32.4 - 216);
-    const t = webcamRect(1920, 1080, 0.2, "top-left");
+    const t = at("top-left");
     expect(t.x).toBeCloseTo(32.4);
     expect(t.y).toBeCloseTo(32.4);
+    // Vertical output: the margin is still measured on the shorter side.
+    const v = cornerCentre("top-left", 0.2, 9 / 16);
+    const tall = webcamBox(1080, 1920, v.x, v.y, 0.2, 1);
+    expect(tall.x).toBeCloseTo(32.4);
+    expect(tall.y).toBeCloseTo(32.4);
+    // A fading bubble shrinks around its centre.
+    const faded = webcamBox(1920, 1080, 0.5, 0.5, 0.2, 0);
+    expect(faded.w).toBeCloseTo(216 * 0.85);
+    expect(faded.x + faded.w / 2).toBeCloseTo(960);
+  });
+  it("resolves export presets", () => {
+    const crop = { x: 0, y: 0, width: 1920, height: 1080 };
+    const exp = (format: "mp4" | "gif", preset: string) => ({ format, preset, fps: 60, quality: "high" as const });
+    expect(outputSize("16:9", crop, exp("gif", "readme"))).toEqual({ width: 800, height: 450 });
+    expect(outputFps(exp("gif", "readme"))).toBe(15);
+    expect(outputSize("16:9", crop, exp("mp4", "shorts"))).toEqual({ width: 1080, height: 1920 });
+    expect(outputFps(exp("mp4", "shorts"))).toBe(30);
+    expect(outputSize("16:9", crop, exp("mp4", "youtube"))).toEqual({ width: 2560, height: 1440 });
+    expect(outputFps(exp("mp4", "1080p"))).toBe(60);
+    // A preset of the other format falls back to that format's default.
+    expect(outputSize("16:9", crop, exp("mp4", "readme"))).toEqual({ width: 1920, height: 1080 });
+    expect(outputSize("16:9", crop, exp("gif", "4k"))).toEqual({ width: 800, height: 450 });
   });
   it("cover-crops", () => {
     expect(coverRect(1280, 720, 100, 100)).toEqual({ x: 280, y: 0, w: 720, h: 720 });

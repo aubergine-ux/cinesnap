@@ -1,15 +1,24 @@
 // In-browser stand-in for the Rust backend, used when the app runs outside Tauri
 // (plain `npm run dev`). It serves a demo project and synthetic motion tracks.
 
-import { clampCentre, outputFps } from "./layout";
+import { outputRatio, spans, totalDuration, webcamStateAt } from "./edit";
+import { PRESETS, clampCentre, outputFps } from "./layout";
 import { cutAt, keptRanges, normalizeCuts, outToSrc, srcToOut } from "./time";
 import type {
   Capabilities,
+  CaptionLine,
+  Imported,
   MotionTracks,
+  MusicTrack,
   Project,
   RecentProject,
+  RecordingClip,
   RecordingOptions,
   Sources,
+  Speech,
+  Suggestion,
+  TransitionMark,
+  Word,
   ZoomSegment,
 } from "./types";
 
@@ -42,20 +51,30 @@ const CLICKS = [
   { t: 21000, x: 1240, y: 240 },
 ];
 const KEYS = [4200, 4350, 4500, 4700, 4900, 5100, 5300, 16600, 16750, 16900, 17100, 17300];
+const SHORTCUTS = [
+  { t: 6500, combo: "Ctrl+K" },
+  { t: 12500, combo: "Ctrl+Shift+P" },
+  { t: 18200, combo: "Enter" },
+];
+const SCRIPT = "So this is the dashboard. Um, every card opens a detail view. Click one and it zooms in. Then, uh, type to search and press enter. That is the whole flow.";
 
-function defaultProject(): Project {
+/** The demo recording as the backend would hand it over. */
+export function demoProject(): Project {
+  const source: Project["source"] = {
+    video: { file: "video.mp4", width: W, height: H, fps: 60, durationMs: DURATION },
+    mic: { file: "mic.wav", offsetMs: 0 },
+    events: { file: "events.jsonl" },
+    platform: "mock",
+    target: "screen",
+  };
+  const crop = { x: 0, y: 0, width: W, height: H };
   return {
     format: "cinesnap-project",
     version: 1,
     createdAt: new Date().toISOString(),
     app: "0.1.0",
-    source: {
-      video: { file: "video.mp4", width: W, height: H, fps: 60, durationMs: DURATION },
-      events: { file: "events.jsonl" },
-      platform: "mock",
-      target: "screen",
-    },
-    crop: { x: 0, y: 0, width: W, height: H },
+    source,
+    crop,
     cuts: [],
     zooms: [],
     autoZoom: { enabled: true, scale: 2, mergeGapMs: 2500, onTyping: true },
@@ -69,14 +88,59 @@ function defaultProject(): Project {
     },
     webcam: { show: true, corner: "bottom-right", size: 0.18, shape: "circle" },
     export: { format: "mp4", preset: "1080p", fps: 60, quality: "high" },
+    clips: [{ id: "main", kind: "recording", transition: { type: "cut", durationMs: 500 }, dir: "", source: structuredClone(source), crop: { ...crop } }],
+    annotations: [],
+    keystrokes: { show: true, position: "bottom", size: 1, holdMs: 1500 },
+    webcamKeys: [],
+    theme: { font: "Inter", accent: "#6d5dfc", text: "#ffffff", surface: "#14151af0" },
+    captions: { show: true, style: "karaoke", y: 0.82, size: 1, color: "#ffffff", highlight: "#ffd84a", background: "#000000a6", maxChars: 36, uppercase: false },
+    audio: { micVolume: 1, denoise: 0, normalize: false, eq: { enabled: false, lowCutHz: 80, bassDb: 0, presenceDb: 3, airDb: 1.5 }, music: undefined },
   };
+}
+
+/** A made-up transcript of the demo, as speech recognition would return it. */
+function demoTranscript(): Word[] {
+  let t = 1200;
+  return SCRIPT.split(" ").map((text) => {
+    const len = 140 + text.length * 45;
+    const w = { t0: t, t1: t + len, text };
+    t += len + (/[.,]$/.test(text) ? 520 : 70);
+    return w;
+  });
+}
+
+/** Group words into caption lines the way the backend does. */
+function captionLines(p: Project): CaptionLine[] {
+  const words = p.transcript?.words ?? [];
+  const total = totalDuration(p);
+  const cuts = normalizeCuts(p.cuts, total);
+  const lines: CaptionLine[] = [];
+  let chars = 0;
+  for (const w of words) {
+    if (cutAt(cuts, (w.t0 + w.t1) / 2) >= 0) continue;
+    const startMs = srcToOut(w.t0, cuts, total);
+    const endMs = Math.max(startMs + 1, srcToOut(w.t1, cuts, total));
+    const last = lines[lines.length - 1];
+    const prev = last?.words[last.words.length - 1];
+    const fresh = !prev || chars + 1 + w.text.length > p.captions.maxChars || startMs - prev.endMs > 700 || (/[.?!]$/.test(prev.text) && chars * 2 >= p.captions.maxChars);
+    if (fresh) {
+      lines.push({ startMs, endMs, words: [] });
+      chars = 0;
+    } else chars += 1;
+    chars += w.text.length;
+    const line = lines[lines.length - 1];
+    line.endMs = endMs;
+    line.words.push({ text: w.text, startMs, endMs });
+  }
+  lines.forEach((l, i) => (l.endMs = Math.min(l.endMs + 350, lines[i + 1]?.startMs ?? Infinity)));
+  return lines;
 }
 
 const projects = new Map<string, Project>();
 
 function getProject(path: string): Project {
   if (!projects.has(path)) {
-    const p = defaultProject();
+    const p = demoProject();
     p.zooms = autoZoom(p);
     projects.set(path, p);
   }
@@ -111,6 +175,13 @@ function cursorAt(ms: number): { x: number; y: number } {
 function autoZoom(project: Project): ZoomSegment[] {
   const manual = project.zooms.filter((z) => z.manual);
   if (!project.autoZoom.enabled) return manual;
+  // The scripted pointer only exists for the demo recording itself.
+  const main = spans(project).find((s) => project.clips[s.index].id === "main");
+  if (!main) return manual;
+  return autoZoomMain(project, manual).map((z) => (z.manual ? z : { ...z, startMs: z.startMs + main.startMs, endMs: z.endMs + main.startMs }));
+}
+
+function autoZoomMain(project: Project, manual: ZoomSegment[]): ZoomSegment[] {
   const points = [...CLICKS.map((c) => c.t)].sort((a, b) => a - b);
   const groups: number[][] = [];
   for (const t of points) {
@@ -147,55 +218,136 @@ function autoZoom(project: Project): ZoomSegment[] {
   return [...manual, ...out].sort((a, b) => a.startMs - b.startMs);
 }
 
+function smoothMix(a: number, b: number, t: number): number {
+  return a + (b - a) * smooth(t);
+}
+
 function computeMotion(project: Project): MotionTracks {
-  const duration = project.source.video.durationMs;
+  const duration = totalDuration(project);
   const fps = outputFps(project.export);
   const cuts = normalizeCuts(project.cuts, duration);
   const outDuration = keptRanges(cuts, duration).reduce((s, r) => s + r.endMs - r.startMs, 0);
   const frames = Math.max(1, Math.floor((outDuration / 1000) * fps));
+  const all = spans(project);
   const srcMs = new Array<number>(frames);
+  const clip = new Array<number>(frames);
   const cam = new Array<number>(frames * 3);
   const cursor = new Array<number>(frames * 4);
-  const crop = project.crop;
-  const cx0 = crop.x + crop.width / 2;
-  const cy0 = crop.y + crop.height / 2;
+  const webcam = new Array<number>(frames * 4);
+  let at = 0;
   for (let i = 0; i < frames; i++) {
     const src = outToSrc((i * 1000) / fps, cuts, duration);
+    while (at + 1 < all.length && src >= all[at].endMs) at++;
     srcMs[i] = src;
-    const pos = cursorAt(src);
+    clip[i] = at;
+    const c = project.clips[at];
+    const local = src - all[at].startMs;
+    // Only the demo recording has a scripted pointer; other clips sit still.
+    const scripted = c.kind === "recording" && c.id === "main";
+    const crop = c.kind === "recording" ? c.crop : project.crop;
+    const cx0 = crop.x + crop.width / 2;
+    const cy0 = crop.y + crop.height / 2;
+    const pos = scripted ? cursorAt(local) : { x: cx0, y: cy0 };
     let k = 0;
     let scale = 1;
     let tx = cx0;
     let ty = cy0;
     for (const z of project.zooms) {
-      if (src < z.startMs || src > z.endMs) continue;
+      if (c.kind !== "recording" || src < z.startMs || src > z.endMs) continue;
       k = Math.min(ease(z.easing, (src - z.startMs) / Math.max(1, z.easeInMs)), ease(z.easing, (z.endMs - src) / Math.max(1, z.easeOutMs)));
       scale = 1 + (z.scale - 1) * k;
       tx = z.mode === "follow" ? pos.x : z.x;
       ty = z.mode === "follow" ? pos.y : z.y;
     }
-    const c = clampCentre(crop, cx0 + (tx - cx0) * k, cy0 + (ty - cy0) * k, scale);
-    cam[i * 3] = c.cx;
-    cam[i * 3 + 1] = c.cy;
+    const centre = clampCentre(crop, cx0 + (tx - cx0) * k, cy0 + (ty - cy0) * k, scale);
+    cam[i * 3] = centre.cx;
+    cam[i * 3 + 1] = centre.cy;
     cam[i * 3 + 2] = scale;
     let press = 0;
-    for (const cl of CLICKS) if (src >= cl.t && src < cl.t + 160) press = 1 - (src - cl.t) / 160;
+    if (scripted) for (const cl of CLICKS) if (local >= cl.t && local < cl.t + 160) press = 1 - (local - cl.t) / 160;
     cursor[i * 4] = pos.x;
     cursor[i * 4 + 1] = pos.y;
-    cursor[i * 4 + 2] = 1;
+    cursor[i * 4 + 2] = scripted ? 1 : 0;
     cursor[i * 4 + 3] = press;
+
+    // Webcam bubble: ease from the previous keyframe state to this one.
+    const keys = project.webcamKeys.filter((key) => key.atMs <= src);
+    const to = webcamStateAt(project, src);
+    const from = keys.length ? webcamStateAt(project, keys[keys.length - 1].atMs - 1) : to;
+    const p = keys.length ? (src - keys[keys.length - 1].atMs) / 450 : 1;
+    const hasCam = c.kind === "recording" && Boolean(c.source.webcam) && project.webcam.show;
+    webcam[i * 4] = smoothMix(from.show ? from.x : to.x, to.show ? to.x : from.x, p);
+    webcam[i * 4 + 1] = smoothMix(from.show ? from.y : to.y, to.show ? to.y : from.y, p);
+    webcam[i * 4 + 2] = smoothMix(from.show ? from.size : to.size, to.show ? to.size : from.size, p);
+    webcam[i * 4 + 3] = hasCam ? smoothMix(from.show ? 1 : 0, to.show ? 1 : 0, p) : 0;
   }
+
+  const transitions: TransitionMark[] = [];
+  let runStart = 0;
+  let pending: TransitionMark | null = null;
+  for (let i = 1; i <= frames; i++) {
+    if (i < frames && clip[i] === clip[i - 1]) continue;
+    const run = i - runStart;
+    if (pending) {
+      pending.half = Math.min(pending.half, Math.floor(run / 2));
+      if (pending.half >= 1) transitions.push(pending);
+      pending = null;
+    }
+    if (i < frames) {
+      const tr = project.clips[clip[i]].transition;
+      if (tr.type !== "cut") pending = { frame: i, half: Math.min(Math.round(((tr.durationMs / 2) * fps) / 1000), Math.floor(run / 2)), kind: tr.type };
+      runStart = i;
+    }
+  }
+
+  const main = all.find((s) => project.clips[s.index].id === "main");
+  const inMain = <T extends { t: number }>(items: T[]) => (main ? items.map((it) => ({ ...it, t: it.t + main.startMs })) : []);
+  const visible = (t: number) => cutAt(cuts, t) < 0;
+  void outputRatio;
   return {
     fps,
     frames,
     durationMs: outDuration,
     srcMs,
+    clip,
+    clipStarts: all.map((s) => s.startMs),
     cam,
     cursor,
-    ripples: CLICKS.filter((c) => cutAt(cuts, c.t) < 0).map((c) => ({ outMs: srcToOut(c.t, cuts, duration), x: c.x, y: c.y })),
-    events: { clicks: CLICKS.map((c) => c.t), keys: KEYS },
+    webcam,
+    ripples: inMain(CLICKS)
+      .filter((c) => visible(c.t))
+      .map((c) => ({ outMs: srcToOut(c.t, cuts, duration), x: c.x, y: c.y, clip: main!.index })),
+    events: { clicks: inMain(CLICKS).map((c) => c.t), keys: inMain(KEYS.map((t) => ({ t }))).map((k) => k.t) },
+    keys: inMain(SHORTCUTS)
+      .filter((k) => visible(k.t))
+      .map((k) => ({ outMs: srcToOut(k.t, cuts, duration), combo: k.combo })),
+    captions: captionLines(project),
+    transitions,
+    cursorDrawn: project.clips.map((c) => c.kind === "recording" && project.cursor.show),
     cursorMode: "metadata",
   };
+}
+
+const MUSIC: MusicTrack[] = [
+  { id: "open-sky", name: "Open Sky", mood: "Calm, spacious", bpm: 60, durationMs: 32000 },
+  { id: "slow-coffee", name: "Slow Coffee", mood: "Mellow, laid-back", bpm: 80, durationMs: 48000 },
+  { id: "bright-side", name: "Bright Side", mood: "Upbeat, light", bpm: 120, durationMs: 32000 },
+  { id: "wooden-steps", name: "Wooden Steps", mood: "Warm, minimal", bpm: 96, durationMs: 40000 },
+  { id: "deep-focus", name: "Deep Focus", mood: "Steady, focused", bpm: 100, durationMs: 38400 },
+];
+
+let styles: unknown[] = [];
+let settings: Record<string, unknown> = {};
+const cancelled = new Set<string>();
+
+/** A fake long-running job that reports progress and can be cancelled. */
+async function job(name: string, stage: string, steps = 12): Promise<void> {
+  cancelled.delete(name);
+  for (let i = 1; i <= steps; i++) {
+    await wait(70);
+    if (cancelled.has(name)) throw new Error("cancelled");
+    emit("job://progress", { job: name, stage, fraction: i / steps });
+  }
 }
 
 let recTimer: number | undefined;
@@ -256,6 +408,79 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
       return;
     case "delete_project":
       projects.delete(args.path as string);
+      return;
+    case "close_project":
+      projects.set(args.path as string, structuredClone(args.project as Project));
+      return;
+    case "import_clip": {
+      const project = args.project as Project;
+      const base = demoProject().clips[0] as RecordingClip;
+      let n = 1;
+      while (project.clips.some((c) => c.id === `clip${n}`)) n++;
+      const clip: RecordingClip = { ...base, id: `clip${n}`, dir: `clips/clip${n}`, transition: { type: "crossfade", durationMs: 500 } };
+      clip.source.video.durationMs = 8000;
+      return { clip, cuts: [], zooms: [] } satisfies Imported;
+    }
+    case "export_presets":
+      return PRESETS;
+    case "music_tracks":
+      return MUSIC;
+    case "speech_models":
+      return {
+        available: true,
+        models: [
+          { id: "base.en", label: "Base (English)", hint: "Good accuracy, fast. The default.", megabytes: 148, englishOnly: true, downloaded: true },
+          { id: "tiny.en", label: "Tiny (English)", hint: "Fastest, makes more mistakes.", megabytes: 78, englishOnly: true, downloaded: false },
+        ],
+      } satisfies Speech;
+    case "transcribe_project":
+      await job("transcribe", "listen", 16);
+      return { language: "en", words: demoTranscript() };
+    case "audio_preview":
+      return null;
+    case "suggest_cuts": {
+      const project = args.project as Project;
+      const total = totalDuration(project);
+      const cuts = normalizeCuts(project.cuts, total);
+      const words = project.transcript?.words ?? [];
+      const out: Suggestion[] = [];
+      if (args.fillers) {
+        words.forEach((w, i) => {
+          if (!/^(um|uh|er|hmm)[.,]?$/i.test(w.text) || cutAt(cuts, (w.t0 + w.t1) / 2) >= 0) return;
+          const before = i ? Math.min(words[i - 1].t1, w.t0) : w.t0;
+          const after = words[i + 1] ? Math.max(words[i + 1].t0, w.t1) : w.t1;
+          out.push({ kind: "filler", startMs: w.t0 - Math.min(120, (w.t0 - before) / 2), endMs: w.t1 + Math.min(120, (after - w.t1) / 2), label: w.text });
+        });
+      }
+      if (args.silences) {
+        await job("silence", "listen", 6);
+        const min = Number(args.minSilenceMs) || 1000;
+        const edges = [0, ...words.flatMap((w) => [w.t0, w.t1]), total];
+        for (let i = 0; i < edges.length; i += 2) {
+          const [a, b] = [edges[i], edges[i + 1]];
+          if (b - a >= min && cutAt(cuts, (a + b) / 2) < 0) out.push({ kind: "silence", startMs: a + (a === 0 ? 0 : 200), endMs: b - (b === total ? 0 : 200), label: `${((b - a) / 1000).toFixed(1)} s of silence` });
+        }
+      }
+      return out.sort((a, b) => a.startMs - b.startMs);
+    }
+    case "export_captions":
+      return captionLines(args.project as Project).length;
+    case "list_styles":
+      return structuredClone(styles);
+    case "save_styles":
+      styles = structuredClone(args.styles as unknown[]);
+      return;
+    case "get_settings":
+      return structuredClone(settings);
+    case "save_settings":
+      settings = structuredClone(args.settings as Record<string, unknown>);
+      return;
+    case "share_video":
+      if (!settings.shareServer || !settings.shareToken) throw new Error("set the share server address and token first");
+      await job("share", "upload");
+      return { id: "demo123abc", url: `${settings.shareServer}/v/demo123abc`, embedUrl: `${settings.shareServer}/embed/demo123abc`, embedHtml: `<iframe src="${settings.shareServer}/embed/demo123abc" width="800" height="450" frameborder="0" allowfullscreen></iframe>`, mediaUrl: `${settings.shareServer}/media/demo123abc.mp4` };
+    case "cancel_job":
+      cancelled.add(args.job as string);
       return;
     case "auto_zoom":
       return autoZoom(args.project as Project);

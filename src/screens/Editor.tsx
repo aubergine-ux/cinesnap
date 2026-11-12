@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ExportModal } from "../components/ExportModal";
+import { TidyModal } from "../components/TidyModal";
 import { Preview } from "../components/Preview";
 import { SettingsPanel } from "../components/SettingsPanel";
 import { Timeline } from "../components/Timeline";
@@ -16,13 +17,15 @@ export function Editor() {
   const format = useStore((s) => s.project!.export.format);
   const panelOpen = useStore((s) => s.panelOpen);
   const { closeProject, togglePanel, setError } = useStore.getState();
+  const saveState = useStore((s) => s.saveState);
   const [exportPath, setExportPath] = useState<string | null>(null);
+  const [tidy, setTidy] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      const typing = t && (t.tagName === "TEXTAREA" || t.tagName === "SELECT" || (t.tagName === "INPUT" && (t as HTMLInputElement).type !== "range"));
-      if (typing || exportPath) return;
+      const typing = t && (t.tagName === "TEXTAREA" || t.tagName === "SELECT" || (t.tagName === "INPUT" && !["range", "checkbox", "color"].includes((t as HTMLInputElement).type)));
+      if (typing || exportPath || tidy) return;
       const st = useStore.getState();
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
@@ -40,7 +43,10 @@ export function Editor() {
         (document.activeElement as HTMLElement | null)?.blur?.();
         st.setPlaying(!st.playing);
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        if (st.selection) {
+        if (st.wordSel) {
+          e.preventDefault();
+          st.cutWords(st.wordSel[0], st.wordSel[1]);
+        } else if (st.selection) {
           e.preventDefault();
           st.deleteSelection();
         }
@@ -50,7 +56,7 @@ export function Editor() {
       } else if (key === "c") {
         st.setCutMode(!st.cutMode);
       } else if (e.key === "Escape") {
-        useStore.setState({ selection: null, cutMode: false, cutMark: null });
+        useStore.setState({ selection: null, cutMode: false, cutMark: null, wordSel: null });
       } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         e.preventDefault();
         st.setPlaying(false);
@@ -59,11 +65,14 @@ export function Editor() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [exportPath]);
+  }, [exportPath, tidy]);
 
   const startExport = async () => {
     try {
       useStore.getState().setPlaying(false);
+      // The export reads the project from memory, but a crash mid-export
+      // should still find the latest edits on disk.
+      await useStore.getState().flushSave();
       const out = await pickSavePath(projectName(path), format);
       if (out) setExportPath(out);
     } catch (e) {
@@ -78,6 +87,9 @@ export function Editor() {
           ‹ Recordings
         </button>
         <span className="title">{projectName(path)}</span>
+        <span className={`save-state ${saveState}`} title="Every change is saved as you make it">
+          {saveState === "saved" ? "Saved" : saveState === "error" ? "Not saved" : "Saving…"}
+        </span>
         <span className="grow" />
         <button className="btn primary small" onClick={startExport}>
           Export
@@ -90,8 +102,9 @@ export function Editor() {
         <Preview />
         <Timeline />
       </main>
-      {panelOpen && <SettingsPanel onExport={startExport} />}
-      {exportPath && <ExportModal outPath={exportPath} onClose={() => setExportPath(null)} />}
+      {panelOpen && <SettingsPanel onExport={startExport} onTidy={() => setTidy(true)} />}
+      {exportPath && <ExportModal outPath={exportPath} title={projectName(path)} onClose={() => setExportPath(null)} />}
+      {tidy && <TidyModal onClose={() => setTidy(false)} />}
     </div>
   );
 }

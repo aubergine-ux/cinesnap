@@ -665,7 +665,7 @@ impl Default for CaptionStyle {
         Self {
             show: true,
             style: "karaoke".into(),
-            y: 0.88,
+            y: 0.82,
             size: 1.0,
             color: "#ffffff".into(),
             highlight: "#ffd84a".into(),

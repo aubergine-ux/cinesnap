@@ -1,9 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from "react";
+import { spans, totalDuration } from "../lib/edit";
 import { useStore } from "../lib/store";
+import type { Annotation, AnnotationType } from "../lib/types";
 import { addCut, moveZoom, normalizeCuts, resizeZoom, setTrimEnd, setTrimStart, trimBounds } from "../lib/time";
 import { clampZoom, formatTime, ticks, zoomAround } from "../lib/timeline";
 
 const PAD = 14;
+const MIN_ANNOTATION_MS = 300;
+
+const TOOLS: { type: AnnotationType; icon: string; label: string; hint: string }[] = [
+  { type: "text", icon: "T", label: "Text", hint: "Add a text callout" },
+  { type: "arrow", icon: "↗", label: "Arrow", hint: "Point at something" },
+  { type: "box", icon: "▭", label: "Box", hint: "Outline an area" },
+  { type: "highlight", icon: "▬", label: "Highlight", hint: "Mark an area like a highlighter pen" },
+  { type: "spotlight", icon: "◎", label: "Spotlight", hint: "Dim everything except an area" },
+  { type: "blur", icon: "▒", label: "Blur", hint: "Hide sensitive information" },
+];
+
+function annotationLabel(a: Annotation): string {
+  return a.type === "text" ? a.text.split("\n")[0] || "Text" : (TOOLS.find((t) => t.type === a.type)?.label ?? a.type);
+}
 
 /** Track a pointer drag until release. */
 function drag(e: RPointerEvent, onMove: (dx: number, ev: PointerEvent) => void, onEnd?: (moved: boolean) => void) {
@@ -53,7 +69,7 @@ export function Timeline() {
   const cutMark = useStore((s) => s.cutMark);
   const past = useStore((s) => s.past.length);
   const future = useStore((s) => s.future.length);
-  const { update, select, editZoom, addZoomAt, seekSource, setPlaying, setCutMode, undo, redo, sourceTime } = useStore.getState();
+  const { update, select, editZoom, addZoomAt, seekSource, setPlaying, setCutMode, undo, redo, sourceTime, addAnnotation, editAnnotation, editWebcamKey, addWebcamKey } = useStore.getState();
 
   const scroller = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState(800);
@@ -61,7 +77,11 @@ export function Timeline() {
   const [ghost, setGhost] = useState<{ a: number; b: number } | null>(null);
   const pendingScroll = useRef<number | null>(null);
 
-  const duration = project.source.video.durationMs;
+  const duration = totalDuration(project);
+  const clipSpans = useMemo(() => spans(project), [project.clips]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hasWebcam = project.clips.some((c) => c.kind === "recording" && c.source.webcam);
+  /** Limits of the clip a time falls in: zooms belong to one recording. */
+  const clipBounds = (ms: number) => clipSpans.find((c) => ms >= c.startMs - 0.5 && ms < c.endMs) ?? { startMs: 0, endMs: duration };
   const inner = Math.max(100, viewport - 2 * PAD);
   const fit = duration > 0 ? inner / duration : 1;
   const pxPerMs = zoom === null ? fit : clampZoom(zoom, duration, inner);
@@ -172,12 +192,18 @@ export function Timeline() {
         <button className="btn small" title="Add a zoom at the playhead" onClick={() => addZoomAt(sourceTime())}>
           ＋ Zoom
         </button>
+        <span className="sep" />
+        {TOOLS.map((t) => (
+          <button key={t.type} className="btn small tool" title={`${t.hint} at the playhead`} onClick={() => addAnnotation(t.type)}>
+            <span aria-hidden>{t.icon}</span> {t.label}
+          </button>
+        ))}
         <span className="tl-hint">
           {cutMode
             ? "Drag on the cut track to remove a section"
             : cutMark !== null
               ? "Cut start marked — move the playhead and press S again"
-              : "Double-click the zoom track to add a zoom · S marks a cut · Ctrl+scroll to zoom"}
+              : "Double-click the zoom track to add a zoom · S marks a cut"}
         </span>
         <span className="grow" />
         <button className="icon-btn" title="Zoom out" onClick={() => zoomBy(1 / 1.5, viewport / 2)}>
@@ -206,6 +232,108 @@ export function Timeline() {
             {events?.clicks.map((t, i) => <i key={`c${i}`} className="ev click" style={{ left: PAD + t * pxPerMs }} />)}
           </div>
 
+          {project.clips.length > 1 && (
+            <div className="tl-track clip-track" onPointerDown={(e) => e.target === e.currentTarget && select(null)}>
+              <span className="track-label">Clips</span>
+              {clipSpans.map((c) => {
+                const clip = project.clips[c.index];
+                const selected = selection?.kind === "clip" && selection.id === clip.id;
+                const tr = clip.transition.type;
+                return (
+                  <div
+                    key={clip.id}
+                    className={`clip-block ${clip.kind} ${selected ? "selected" : ""}`}
+                    style={{ left: PAD + c.startMs * pxPerMs, width: Math.max(2, c.durationMs * pxPerMs - 1) }}
+                    title={clip.kind === "card" ? "Card" : "Recording"}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      select({ kind: "clip", id: clip.id });
+                    }}
+                  >
+                    {c.index > 0 && tr !== "cut" && <span className="transition-mark" title={tr === "zoom" ? "Zoom through" : "Crossfade"}>{tr === "zoom" ? "⤢" : "⨉"}</span>}
+                    <span className="zoom-label">{clip.kind === "card" ? clip.title.split("\n")[0] || "Card" : `Recording ${clipSpans.slice(0, c.index + 1).filter((x) => project.clips[x.index].kind === "recording").length}`}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {project.annotations.length > 0 && (
+            <div className="tl-track note-track" onPointerDown={(e) => e.target === e.currentTarget && select(null)}>
+              <span className="track-label">Notes</span>
+              {project.annotations.map((a) => {
+                const selected = selection?.kind === "annotation" && selection.id === a.id;
+                return (
+                  <div
+                    key={a.id}
+                    className={`note-block ${a.type} ${selected ? "selected" : ""}`}
+                    style={{ left: PAD + a.startMs * pxPerMs, width: Math.max(4, (a.endMs - a.startMs) * pxPerMs) }}
+                    onPointerDown={(e) => {
+                      select({ kind: "annotation", id: a.id });
+                      const len = a.endMs - a.startMs;
+                      drag(
+                        e,
+                        (dx) => {
+                          const start = Math.max(0, Math.min(duration - len, a.startMs + dx / pxPerMs));
+                          editAnnotation(a.id, { startMs: start, endMs: start + len }, "time");
+                        },
+                        (moved) => !moved && seekSource(a.startMs + Math.min(len / 2, 250)),
+                      );
+                    }}
+                  >
+                    <span className="zoom-label">{annotationLabel(a)}</span>
+                    {(["start", "end"] as const).map((edge) => (
+                      <span
+                        key={edge}
+                        className={`handle ${edge}`}
+                        onPointerDown={(e) => {
+                          select({ kind: "annotation", id: a.id });
+                          drag(e, (_dx, ev) => {
+                            const ms = msAt(ev.clientX);
+                            const cur = useStore.getState().project!.annotations.find((x) => x.id === a.id);
+                            if (!cur) return;
+                            editAnnotation(a.id, edge === "start" ? { startMs: Math.min(ms, cur.endMs - MIN_ANNOTATION_MS) } : { endMs: Math.max(ms, cur.startMs + MIN_ANNOTATION_MS) }, "time");
+                          });
+                        }}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {hasWebcam && (
+            <div
+              className="tl-track cam-track"
+              title="Double-click to move or hide the webcam from here on"
+              onPointerDown={(e) => e.target === e.currentTarget && select(null)}
+              onDoubleClick={(e) => {
+                if (e.target !== e.currentTarget) return;
+                seekSource(msAt(e.clientX));
+                addWebcamKey();
+              }}
+            >
+              <span className="track-label">Webcam</span>
+              {project.webcamKeys.map((k) => (
+                <span
+                  key={k.id}
+                  className={`cam-key ${k.show ? "" : "hidden"} ${selection?.kind === "webcamKey" && selection.id === k.id ? "selected" : ""}`}
+                  style={{ left: PAD + k.atMs * pxPerMs }}
+                  title={k.show ? "Webcam moves here" : "Webcam hides here"}
+                  onPointerDown={(e) => {
+                    select({ kind: "webcamKey", id: k.id });
+                    drag(
+                      e,
+                      (_dx, ev) => editWebcamKey(k.id, { atMs: msAt(ev.clientX) }, "time"),
+                      (moved) => !moved && seekSource(k.atMs + 500),
+                    );
+                  }}
+                />
+              ))}
+            </div>
+          )}
+
           <div
             className="tl-track zoom-track"
             onPointerDown={(e) => {
@@ -227,9 +355,14 @@ export function Timeline() {
                   onPointerDown={(e) => {
                     select({ kind: "zoom", id: z.id });
                     const start0 = z.startMs;
+                    const bounds = clipBounds(start0);
                     drag(e, (dx) => {
                       const r = moveZoom(useStore.getState().project!.zooms, z.id, start0 + dx / pxPerMs, duration);
-                      if (r) editZoom(z.id, r, "move");
+                      if (!r) return;
+                      // Stay inside the recording the zoom belongs to.
+                      const len = r.endMs - r.startMs;
+                      const start = Math.max(bounds.startMs, Math.min(bounds.endMs - len, r.startMs));
+                      editZoom(z.id, { startMs: start, endMs: start + len }, "move");
                     });
                   }}
                   onDoubleClick={(e) => e.stopPropagation()}
@@ -251,8 +384,10 @@ export function Timeline() {
                       className={`handle ${edge}`}
                       onPointerDown={(e) => {
                         select({ kind: "zoom", id: z.id });
+                        const bounds = clipBounds(z.startMs);
                         drag(e, (_dx, ev) => {
-                          const r = resizeZoom(useStore.getState().project!.zooms, z.id, edge, msAt(ev.clientX), duration);
+                          const ms = Math.max(bounds.startMs, Math.min(bounds.endMs, msAt(ev.clientX)));
+                          const r = resizeZoom(useStore.getState().project!.zooms, z.id, edge, ms, duration);
                           if (r) editZoom(z.id, r, "resize");
                         });
                       }}

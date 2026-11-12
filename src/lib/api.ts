@@ -6,13 +6,23 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { mockInvoke, mockListen } from "./mock";
 import type {
+  AppSettings,
   Capabilities,
+  ExportPreset,
   ExportProgress,
+  Imported,
+  JobProgress,
   MotionTracks,
+  MusicTrack,
   Project,
   RecentProject,
   RecordingOptions,
+  Shared,
   Sources,
+  Speech,
+  StylePreset,
+  Suggestion,
+  Transcript,
   ZoomSegment,
 } from "./types";
 
@@ -59,6 +69,24 @@ export const api = {
   computeMotion: (path: string, project: Project) => call<MotionTracks>("compute_motion", { path, project }),
   exportVideo: (path: string, project: Project, outPath: string) => call<void>("export_video", { path, project, outPath }),
   cancelExport: () => call<void>("cancel_export"),
+  /** Save for the last time and drop the files of clips that were removed. */
+  closeProject: (path: string, project: Project) => call<void>("close_project", { path, project }),
+  importClip: (path: string, project: Project, from: string) => call<Imported>("import_clip", { path, project, from }),
+  exportPresets: () => call<ExportPreset[]>("export_presets"),
+  musicTracks: () => call<MusicTrack[]>("music_tracks"),
+  speechModels: () => call<Speech>("speech_models"),
+  transcribe: (path: string, project: Project, model: string, language: string | null) => call<Transcript>("transcribe_project", { path, project, model, language }),
+  /** Path of the soundtrack for the preview, or null when the project is silent. */
+  audioPreview: (path: string, project: Project) => call<string | null>("audio_preview", { path, project }),
+  suggestCuts: (path: string, project: Project, fillers: boolean, silences: boolean, minSilenceMs: number) => call<Suggestion[]>("suggest_cuts", { path, project, fillers, silences, minSilenceMs }),
+  exportCaptions: (project: Project, outPath: string) => call<number>("export_captions", { project, outPath }),
+  listStyles: () => call<StylePreset[]>("list_styles"),
+  saveStyles: (styles: StylePreset[]) => call<void>("save_styles", { styles }),
+  getSettings: () => call<AppSettings>("get_settings"),
+  saveSettings: (settings: AppSettings) => call<void>("save_settings", { settings }),
+  shareVideo: (file: string, title: string) => call<Shared>("share_video", { file, title }),
+  cancelJob: (job: string) => call<void>("cancel_job", { job }),
+  onJobProgress: (cb: (p: JobProgress) => void) => on("job://progress", cb),
   /** Write a diagnostic line to the backend log. */
   clientLog: (message: string) => void (isTauri ? invoke("client_log", { message }).catch(() => {}) : undefined),
   onFfmpegProgress: (cb: (p: { fraction: number }) => void) => on("ffmpeg://progress", cb),
@@ -79,6 +107,34 @@ export function mediaUrl(path: string, file?: string): string | null {
 export async function pickSavePath(defaultName: string, ext: string): Promise<string | null> {
   if (!isTauri) return `/tmp/${defaultName}.${ext}`;
   return save({ defaultPath: `${defaultName}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+}
+
+/** Pick a file to save to; `ext` may list several extensions, first is the default. */
+export async function pickSaveAs(defaultName: string, name: string, extensions: string[]): Promise<string | null> {
+  if (!isTauri) return `/tmp/${defaultName}.${extensions[0]}`;
+  return save({ defaultPath: `${defaultName}.${extensions[0]}`, filters: [{ name, extensions }] });
+}
+
+export async function pickAudio(): Promise<string | null> {
+  if (!isTauri) return null;
+  const res = await open({ multiple: false, filters: [{ name: "Audio", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac", "opus"] }] });
+  return typeof res === "string" ? res : null;
+}
+
+/** Pick a .cinesnap recording folder. */
+export async function pickRecording(): Promise<string | null> {
+  if (!isTauri) return "mock://other.cinesnap";
+  const res = await open({ directory: true, multiple: false });
+  return typeof res === "string" ? res : null;
+}
+
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function pickImage(): Promise<string | null> {
