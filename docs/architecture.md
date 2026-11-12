@@ -17,8 +17,9 @@ came out of it, and how the pieces fit together.
 Why ffmpeg does the grabbing on three of four backends: Cinesnap already needs
 ffmpeg for encoding, so the capture → encode path becomes a single process with
 no frame copies through Rust, and the amount of platform-specific unsafe code
-drops to almost nothing. The capture layer is a trait (`CaptureBackend`), so a
-native ScreenCaptureKit or Windows.Graphics.Capture backend can be added later
+drops to almost nothing. The recorder only needs "a thing that writes
+`video.mp4` and reports when its first frame arrived", so a native
+ScreenCaptureKit or Windows.Graphics.Capture backend can be added later
 without touching anything else — the main things they would buy are per-window
 capture that follows a moving window and HDR handling.
 
@@ -31,6 +32,9 @@ frames arrive from PipeWire and are piped into an ffmpeg encoder as raw video.
 | --- | --- | --- |
 | Windows, macOS, X11 | polled global pointer (`device_query`) | polled button and key state (`device_query`) |
 | Wayland | PipeWire `SPA_META_Cursor` from the ScreenCast stream | `evdev` (read-only), with a fallback |
+
+Windows on these platforms are listed with `xcap` and recorded as a crop of
+the screen they are on (so the window should stay put while recording).
 
 Polling at 240 Hz was chosen over OS event hooks (`rdev`): no hook thread
 constraints, no macOS main-thread crashes, no interference with the user's
@@ -66,9 +70,12 @@ observing it. What is available:
    weight it lower. The app shows a one-line hint on how to enable exact clicks.
 4. **Capture always goes through the portal picker.** The user chooses the
    screen or window in the system dialog; Cinesnap cannot enumerate windows
-   itself. A restore token is stored so the dialog is skipped on later runs
-   when the compositor allows it.
-5. **Regions** are not a portal concept. Cinesnap records the whole monitor and
+   itself. The picker is shown for every recording so the source can always
+   be changed.
+5. **Touchpad taps** are synthesised into clicks by the compositor and never
+   appear as button events on the kernel device, so tap-to-click is only seen
+   through the inferred-click path. Physical clicks are exact.
+6. **Regions** are not a portal concept. Cinesnap records the whole monitor and
    stores the region as a crop in the project, which also makes the region
    adjustable after the fact. The same approach is used on every platform.
 
@@ -93,9 +100,9 @@ works. The first that succeeds is used; `libx264` is the fallback.
 │            │ commands / events                                │
 │  ──────────┼───────────────────────────────────────────────── │
 │  Rust backend                                                 │
-│   capture/   CaptureBackend: portal+pipewire | ffmpeg grab    │
-│   input/     InputTracker:   pipewire meta + evdev | polling  │
-│   audio/     microphone → WAV (cpal)                          │
+│   recorder/  portal + pipewire | ffmpeg grab, mic, webcam     │
+│   recorder/  input: pipewire cursor meta + evdev | polling    │
+│   devices    screens, windows, microphones, webcams           │
 │   project/   bundle format, event log, edit state             │
 │   motion/    auto-zoom, camera path, cursor smoothing         │
 │   render/    frame compositor (CPU, rayon)                    │
@@ -104,6 +111,16 @@ works. The first that succeeds is used; `libx264` is the fallback.
 ```
 
 ### Recording
+
+The microphone and webcam are also captured by ffmpeg (PulseAudio/PipeWire,
+AVFoundation or DirectShow), each in its own process. Every capture process
+runs a `showinfo` filter; the moment its first log line appears is taken as
+that track's first sample, which is how tracks started by different processes
+are aligned without a shared clock inside the files.
+
+While recording, the app window minimises itself. When it comes back to the
+front (to press Stop), that moment is remembered and the tail of the recording
+after it is cut by default — as an ordinary, undoable cut.
 
 Video, audio, webcam and input are recorded as independent tracks into a
 project bundle (see [recording-format.md](recording-format.md)). The video is
