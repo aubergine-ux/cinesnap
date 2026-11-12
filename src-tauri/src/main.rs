@@ -318,7 +318,21 @@ fn cancel_export(state: State<AppState>) {
     state.export_cancel.store(true, Ordering::SeqCst);
 }
 
+/// WebKitGTK's DMA-BUF renderer crashes on Wayland with the proprietary
+/// NVIDIA driver ("Error 71 (Protocol error) dispatching to Wayland
+/// display"). Fall back to the shared-memory path there.
+#[cfg(target_os = "linux")]
+fn webkit_workarounds() {
+    let nvidia = Path::new("/proc/driver/nvidia/version").exists();
+    if nvidia && devices::is_wayland() && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    webkit_workarounds();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())

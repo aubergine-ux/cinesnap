@@ -59,7 +59,7 @@ pub struct PortalCapture {
 
 /// Which cursor modes the running portal offers.
 pub fn cursor_metadata_available() -> bool {
-    tauri::async_runtime::block_on(async {
+    pollster::block_on(async {
         let proxy = Screencast::new().await.ok()?;
         proxy.available_cursor_modes().await.ok()
     })
@@ -76,7 +76,7 @@ struct Portal {
 /// Show the system's screen/window picker and open the stream.
 fn open_portal() -> Result<Portal> {
     let (close, closed) = mpsc::channel::<()>();
-    let (node_id, fd, cursor_metadata, proxy, session) = tauri::async_runtime::block_on(async {
+    let (node_id, fd, cursor_metadata, proxy, session) = pollster::block_on(async {
         let proxy = Screencast::new().await?;
         let modes = proxy
             .available_cursor_modes()
@@ -120,7 +120,7 @@ fn open_portal() -> Result<Portal> {
     // The cast lives as long as the portal session; keep it until told to stop.
     std::thread::spawn(move || {
         let _ = closed.recv();
-        tauri::async_runtime::block_on(async {
+        pollster::block_on(async {
             let _ = session.close().await;
         });
         drop(proxy);

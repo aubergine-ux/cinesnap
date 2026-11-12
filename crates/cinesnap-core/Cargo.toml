@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "cinesnap"
+name = "cinesnap-cli"
 path = "src/bin/cinesnap.rs"
 
 [dependencies]

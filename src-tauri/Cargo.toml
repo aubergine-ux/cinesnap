@@ -25,3 +25,4 @@ ffmpeg-sidecar = "2"
 ashpd = { version = "0.14", default-features = false, features = ["async-io", "screencast"] }
 pipewire = "0.10"
 evdev = "0.13"
+pollster = "0.4"

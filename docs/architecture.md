@@ -140,7 +140,7 @@ ffmpeg (decode, kept ranges only) ──raw RGBA──▶ compositor ──raw R
   in two passes with a per-video palette (`palettegen` / `paletteuse` with
   rectangle diffing) for small, clean README GIFs.
 
-The export path is also exposed as a CLI (`cinesnap render <project> -o out.mp4`)
+The export path is also exposed as a CLI (`cinesnap-cli render <project> -o out.mp4`)
 which is what the test suite and the README demo video use.
 
 ## 3. Auto-zoom algorithm
