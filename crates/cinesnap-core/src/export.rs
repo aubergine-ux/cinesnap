@@ -66,7 +66,8 @@ fn part_path(out: &Path) -> PathBuf {
 }
 
 /// Render `project` (stored in `dir`) to `opts.out`. The format is taken from
-/// `project.export.format`.
+/// `project.export.format`. Nothing is left behind when the export fails or
+/// is cancelled.
 pub fn export(
     dir: &Path,
     project: &Project,
@@ -74,6 +75,28 @@ pub fn export(
     progress: &mut dyn FnMut(Progress),
     cancel: &AtomicBool,
 ) -> Result<()> {
+    let part = part_path(opts.out);
+    let result = export_to(dir, project, opts, &part, progress, cancel);
+    if result.is_err() {
+        ffmpeg::remove_file_patiently(&part);
+    }
+    result
+}
+
+fn export_to(
+    dir: &Path,
+    project: &Project,
+    opts: &ExportOptions,
+    part: &Path,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<()> {
+    project.validate()?;
+    if let Some(parent) = opts.out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if !parent.is_dir() {
+            bail!("the folder {} does not exist", parent.display());
+        }
+    }
     let mut project = project.clone();
     project.sanitize();
     let project = &project;
@@ -137,7 +160,6 @@ pub fn export(
     };
 
     let fps = tracks.fps as f64;
-    let part = part_path(opts.out);
     let tmp = tempfile::Builder::new()
         .prefix("cinesnap-export")
         .tempdir()
@@ -180,7 +202,7 @@ pub fn export(
                     c.args(["-vf", f]);
                 }
                 c.args(encoder.codec_args(quality, false));
-                c.args(["-movflags", "+faststart"]).arg(&part);
+                c.args(["-movflags", "+faststart"]).arg(part);
             },
         )?
     };
@@ -190,8 +212,6 @@ pub fn export(
     let mut next_ripple = 0;
     for i in 0..tracks.frames {
         if cancel.load(Ordering::Relaxed) {
-            writer.abort();
-            ffmpeg::remove_file_patiently(&part);
             return Err(Cancelled.into());
         }
         let out_ms = i as f64 * 1000.0 / fps;
@@ -254,17 +274,16 @@ pub fn export(
             opts.ffmpeg,
             &intermediate,
             tmp.path(),
-            &part,
+            part,
             &project.export.quality,
             progress,
             tracks.frames,
         )?;
     }
     if cancel.load(Ordering::Relaxed) {
-        ffmpeg::remove_file_patiently(&part);
         return Err(Cancelled.into());
     }
-    std::fs::rename(&part, opts.out).with_context(|| format!("writing {}", opts.out.display()))?;
+    std::fs::rename(part, opts.out).with_context(|| format!("writing {}", opts.out.display()))?;
     Ok(())
 }
 

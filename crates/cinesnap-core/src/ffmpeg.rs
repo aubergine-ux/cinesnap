@@ -516,13 +516,16 @@ impl FrameWriter {
         }
         Ok(())
     }
+}
 
-    /// Stop encoding and wait until ffmpeg has let go of the output file.
-    ///
-    /// Closing stdin makes ffmpeg exit on its own, which matters when the
-    /// executable is a launcher shim (as with some Windows packages): killing
-    /// the shim would leave the real process running with the file open.
-    pub fn abort(mut self) {
+/// Dropping a writer that was not finished (an error or a cancel upstream)
+/// stops the encoder and waits for it, so the caller can remove the output.
+///
+/// Closing stdin makes ffmpeg exit on its own, which matters when the
+/// executable is a launcher shim (as with some Windows packages): killing
+/// the shim would leave the real process running with the file open.
+impl Drop for FrameWriter {
+    fn drop(&mut self) {
         drop(self.stdin.take());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {

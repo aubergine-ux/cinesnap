@@ -183,3 +183,33 @@ fn cancel_and_empty_exports_fail_cleanly() {
     let err = run(&dir, &p, &ff, &out).unwrap_err();
     assert!(err.to_string().contains("nothing to export"), "{err:#}");
 }
+
+#[test]
+fn broken_recordings_fail_without_leftovers() {
+    let Some(ff) = ffmpeg() else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("demo.cinesnap");
+    let mut p = demo(&ff, &dir);
+    p.export.preset = "720p".into();
+    let out = tmp.path().join("out.mp4");
+    let leftovers = || out.exists() || tmp.path().join("out.part.mp4").exists();
+
+    // A missing or unreadable event log only means no effects.
+    std::fs::write(p.events_path(&dir), "garbage{{{\n").unwrap();
+    run(&dir, &p, &ff, &out).unwrap();
+    std::fs::remove_file(&out).unwrap();
+
+    let missing = tmp.path().join("nowhere").join("out.mp4");
+    let err = run(&dir, &p, &ff, &missing).unwrap_err();
+    assert!(err.to_string().contains("does not exist"), "{err:#}");
+
+    std::fs::write(p.video_path(&dir), "not a video").unwrap();
+    let err = run(&dir, &p, &ff, &out).unwrap_err();
+    assert!(err.to_string().contains("could not decode"), "{err:#}");
+    assert!(!leftovers());
+
+    p.source.video.width = 0;
+    assert!(run(&dir, &p, &ff, &out).is_err());
+    assert!(Project::load(&dir).is_ok(), "the saved manifest is intact");
+    assert!(!leftovers());
+}
