@@ -112,7 +112,10 @@ pub struct EventLog {
 
 impl EventLog {
     pub fn empty(width: u32, height: u32) -> Self {
-        Self { header: Header::new(width, height, "none", "none"), events: vec![] }
+        Self {
+            header: Header::new(width, height, "none", "none"),
+            events: vec![],
+        }
     }
 
     pub fn load(path: &Path) -> Result<Self> {
@@ -124,7 +127,10 @@ impl EventLog {
         let mut lines = reader.lines();
         let first = lines.next().context("event log is empty")??;
         let header: Header = serde_json::from_str(&first).context("parsing event log header")?;
-        anyhow::ensure!(header.format == "cinesnap-events", "not a Cinesnap event log");
+        anyhow::ensure!(
+            header.format == "cinesnap-events",
+            "not a Cinesnap event log"
+        );
         let mut events = Vec::new();
         for line in lines {
             let Ok(line) = line else { break };
@@ -168,6 +174,58 @@ impl EventWriter {
     }
 }
 
+/// Guess clicks from cursor movement alone, for sessions where button state
+/// is not available (Wayland without access to input devices).
+///
+/// People move to a target, stop, click, and move on. A candidate is a stop
+/// of at least `DWELL_MS` that follows a deliberate move; the click is placed
+/// shortly after the cursor comes to rest. Returns `down` events marked
+/// `inferred`.
+pub fn infer_clicks(events: &[Event]) -> Vec<Event> {
+    const DWELL_MS: f64 = 350.0;
+    const STILL_PX: f64 = 6.0;
+    const TRAVEL_PX: f64 = 80.0;
+    const CLICK_DELAY_MS: f64 = 120.0;
+
+    let moves: Vec<(f64, f64, f64)> = events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Move { x, y } => Some((e.t, x, y)),
+            _ => None,
+        })
+        .collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut travelled = 0.0;
+    while i < moves.len() {
+        let (t0, x0, y0) = moves[i];
+        // Extend the rest period while the cursor stays near where it stopped.
+        let mut j = i;
+        while j + 1 < moves.len() && (moves[j + 1].1 - x0).hypot(moves[j + 1].2 - y0) <= STILL_PX {
+            j += 1;
+        }
+        // The rest lasts until the next sample that leaves the spot.
+        let rest_end = moves.get(j + 1).map_or(moves[j].0, |m| m.0);
+        if rest_end - t0 >= DWELL_MS && travelled >= TRAVEL_PX {
+            out.push(Event {
+                t: t0 + CLICK_DELAY_MS,
+                kind: EventKind::Down {
+                    b: Button::Left,
+                    x: x0,
+                    y: y0,
+                    inferred: true,
+                },
+            });
+            travelled = 0.0;
+        }
+        if let Some(next) = moves.get(j + 1) {
+            travelled += (next.1 - x0).hypot(next.2 - y0);
+        }
+        i = j + 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,9 +244,20 @@ mod tests {
 {"t":6000,"k":"mo"#;
         let log = EventLog::read(text.as_bytes()).unwrap();
         assert_eq!(log.header.width, 2560);
-        assert_eq!(log.events.len(), 7, "unknown kind and truncated line are skipped");
+        assert_eq!(
+            log.events.len(),
+            7,
+            "unknown kind and truncated line are skipped"
+        );
         assert_eq!(log.events[3].kind, EventKind::Key);
-        assert!(matches!(log.events[1].kind, EventKind::Down { b: Button::Left, inferred: false, .. }));
+        assert!(matches!(
+            log.events[1].kind,
+            EventKind::Down {
+                b: Button::Left,
+                inferred: false,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -197,13 +266,57 @@ mod tests {
         let path = dir.path().join("events.jsonl");
         let header = Header::new(100, 100, "exact", "metadata");
         let mut w = EventWriter::create(&path, &header).unwrap();
-        let ev = Event { t: 1.5, kind: EventKind::Down { b: Button::Left, x: 1.0, y: 2.0, inferred: true } };
+        let ev = Event {
+            t: 1.5,
+            kind: EventKind::Down {
+                b: Button::Left,
+                x: 1.0,
+                y: 2.0,
+                inferred: true,
+            },
+        };
         w.write(&ev).unwrap();
-        w.write(&Event { t: 2.0, kind: EventKind::Key }).unwrap();
+        w.write(&Event {
+            t: 2.0,
+            kind: EventKind::Key,
+        })
+        .unwrap();
         w.flush().unwrap();
         let log = EventLog::load(&path).unwrap();
         assert_eq!(log.header, header);
         assert_eq!(log.events[0], ev);
-        assert!(std::fs::read_to_string(&path).unwrap().contains(r#"{"t":2.0,"k":"key"}"#));
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains(r#"{"t":2.0,"k":"key"}"#));
+    }
+
+    #[test]
+    fn infers_clicks_from_move_stop_patterns() {
+        let mv = |t: f64, x: f64, y: f64| Event {
+            t,
+            kind: EventKind::Move { x, y },
+        };
+        let mut ev = vec![mv(0.0, 0.0, 0.0)];
+        // Sweep to (400, 300) over 400 ms, rest 600 ms, tiny wobble, sweep on
+        // without a long stop, then a final long rest.
+        ev.extend((1..=40).map(|i| mv(i as f64 * 10.0, i as f64 * 10.0, i as f64 * 7.5)));
+        ev.push(mv(700.0, 402.0, 301.0));
+        ev.extend((1..=30).map(|i| mv(1000.0 + i as f64 * 10.0, 400.0 + i as f64 * 15.0, 300.0)));
+        ev.push(mv(1400.0, 900.0, 320.0)); // only a 100 ms pause at (850, 300)
+        ev.push(mv(2400.0, 900.0, 321.0));
+        let clicks = infer_clicks(&ev);
+        assert_eq!(clicks.len(), 2, "{clicks:?}");
+        assert_eq!(clicks[0].t, 520.0);
+        assert!(
+            matches!(clicks[0].kind, EventKind::Down { x, y, inferred: true, .. } if x == 400.0 && y == 300.0)
+        );
+        assert_eq!(clicks[1].t, 1520.0);
+        // A cursor that never travels far produces nothing.
+        assert!(infer_clicks(&[
+            mv(0.0, 5.0, 5.0),
+            mv(2000.0, 6.0, 5.0),
+            mv(4000.0, 5.0, 6.0)
+        ])
+        .is_empty());
     }
 }
