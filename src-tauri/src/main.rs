@@ -449,8 +449,18 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "doctor") {
         return doctor();
     }
-    if args.get(1).is_some_and(|a| a == "record") {
-        if let Err(e) = headless_record(&args[2..]) {
+    let command = args.get(1).map(String::as_str).unwrap_or_default();
+    let headless = match command {
+        "record" => Some(headless_record(&args[2..])),
+        // `cinesnap render …`, `cinesnap autozoom …`: the same command line
+        // as the standalone cinesnap-cli.
+        c if cinesnap_core::cli::COMMANDS.contains(&c) => {
+            Some(cinesnap_core::cli::run(std::env::args_os()))
+        }
+        _ => None,
+    };
+    if let Some(result) = headless {
+        if let Err(e) = result {
             eprintln!("error: {e:#}");
             std::process::exit(1);
         }

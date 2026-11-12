@@ -1,6 +1,7 @@
 //! Core of Cinesnap: the project format, the motion model, the frame
 //! compositor and the export pipeline. Nothing here depends on the GUI.
 
+pub mod cli;
 pub mod events;
 pub mod export;
 pub mod ffmpeg;
