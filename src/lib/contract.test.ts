@@ -15,7 +15,9 @@ const FIXTURE = fileURLToPath(new URL("../../crates/cinesnap-core/tests/fixtures
 
 function everything(): Project {
   const p = demoProject();
+  // Fixed values, so a release does not change the fixture.
   p.createdAt = "2026-01-01T00:00:00.000Z";
+  p.app = "0.0.0";
   const main = p.clips[0] as RecordingClip;
   main.source.webcam = { file: "webcam.mp4", offsetMs: 120, width: 1280, height: 720 };
   const second: RecordingClip = { ...structuredClone(main), id: "clip1", dir: "clips/clip1", transition: { type: "zoom", durationMs: 600 } };

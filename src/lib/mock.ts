@@ -1,7 +1,7 @@
 // In-browser stand-in for the Rust backend, used when the app runs outside Tauri
 // (plain `npm run dev`). It serves a demo project and synthetic motion tracks.
 
-import { outputRatio, spans, totalDuration, webcamStateAt } from "./edit";
+import { spans, totalDuration, webcamStateAt } from "./edit";
 import { PRESETS, clampCentre, outputFps } from "./layout";
 import { cutAt, keptRanges, normalizeCuts, outToSrc, srcToOut } from "./time";
 import type {
@@ -303,7 +303,6 @@ function computeMotion(project: Project): MotionTracks {
   const main = all.find((s) => project.clips[s.index].id === "main");
   const inMain = <T extends { t: number }>(items: T[]) => (main ? items.map((it) => ({ ...it, t: it.t + main.startMs })) : []);
   const visible = (t: number) => cutAt(cuts, t) < 0;
-  void outputRatio;
   return {
     fps,
     frames,

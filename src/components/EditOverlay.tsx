@@ -1,5 +1,5 @@
 import type { PointerEvent as RPointerEvent } from "react";
-import { annotationBox, moveAnnotation, outputRatio, webcamStateAt } from "../lib/edit";
+import { annotationBox, moveAnnotation, webcamStateAt } from "../lib/edit";
 import { mapPoint, webcamBox, type Box } from "../lib/layout";
 import { useStore } from "../lib/store";
 import type { Annotation } from "../lib/types";
@@ -108,7 +108,6 @@ export function EditOverlay({ width, height }: { width: number; height: number }
   const hasCam = project.clips.some((c) => c.kind === "recording" && c.source.webcam) && project.webcam.show;
   const dragBubble = (e: RPointerEvent) => {
     const from = key ?? webcamStateAt({ ...project, webcamKeys: [] }, 0);
-    void outputRatio;
     drag(e, (dx, dy) => {
       const x = Math.max(0, Math.min(1, from.x + dx / width));
       const y = Math.max(0, Math.min(1, from.y + dy / height));

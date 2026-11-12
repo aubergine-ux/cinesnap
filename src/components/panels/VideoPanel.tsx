@@ -1,8 +1,7 @@
 import { useRef } from "react";
 import { pickRecording } from "../../lib/api";
-import { clipDuration, spanAt, spans } from "../../lib/edit";
+import { clipDuration, outputRatio, spanAt, spans } from "../../lib/edit";
 import { cornerCentre } from "../../lib/layout";
-import { outputRatio } from "../../lib/edit";
 import { useStore } from "../../lib/store";
 import { formatTime } from "../../lib/timeline";
 import type { Corner, Project, Rect, WebcamSettings } from "../../lib/types";

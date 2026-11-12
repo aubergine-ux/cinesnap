@@ -2,7 +2,7 @@
   "format": "cinesnap-project",
   "version": 1,
   "createdAt": "2026-01-01T00:00:00.000Z",
-  "app": "0.1.0",
+  "app": "0.0.0",
   "source": {
     "video": {
       "file": "video.mp4",

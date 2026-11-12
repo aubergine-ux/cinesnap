@@ -2,7 +2,6 @@
 // compositor (`render.rs`): change them in both places or the preview stops
 // being WYSIWYG.
 
-import { mainCrop, outputRatio, spans } from "../lib/edit";
 import { coverRect, frameRect, gradientLine, mapPoint, unitScale, viewRect, webcamBox, type Box } from "../lib/layout";
 import type { Annotation, Background, CaptionLine, CardClip, MotionTracks, Project, RecordingClip, TransitionKind, TransitionMark } from "../lib/types";
 import { CENTER_BASELINE, FIRST_BASELINE, LINE_HEIGHT, drawText, measure, type TextStyle } from "./text";
@@ -614,6 +613,3 @@ export function frameGeometry(W: number, H: number, project: Project, motion: Mo
   const view = i >= 0 ? viewRect(clip.crop, motion!.cam[i * 3], motion!.cam[i * 3 + 1], Math.max(1, motion!.cam[i * 3 + 2])) : viewRect(clip.crop, clip.crop.x + clip.crop.width / 2, clip.crop.y + clip.crop.height / 2, 1);
   return { clipIndex, frame, view };
 }
-
-// Re-exported so callers that only draw do not need the edit module.
-export { mainCrop, outputRatio, spans };
