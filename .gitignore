@@ -1,0 +1,6 @@
+node_modules/
+dist/
+target/
+*.cinesnap/
+.DS_Store
+*.log
