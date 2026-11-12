@@ -28,7 +28,7 @@
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#platform-support">Platform support</a> ·
-  <a href="docs/index.html">Docs</a> ·
+  <a href="https://aubergine-ux.github.io/cinesnap/">Docs</a> ·
   <a href="docs/architecture.md">Architecture</a>
 </p>
 
