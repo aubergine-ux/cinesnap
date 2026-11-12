@@ -12,9 +12,9 @@ const TYPING_MIN_KEYS: usize = 3;
 const HOLD_AFTER_MS: f64 = 900.0;
 /// Fraction of the ease-in that happens before the first interest point.
 const LEAD_IN: f64 = 0.75;
-/// Segments whose gap is smaller than this are joined rather than bouncing
-/// out and straight back in.
-const MIN_GAP_MS: f64 = 300.0;
+/// Shortest hold after the last interest point when the next segment is
+/// close and the two are not merged.
+const MIN_HOLD_MS: f64 = 300.0;
 
 #[derive(Clone, Copy, Debug)]
 struct Point {
@@ -92,19 +92,31 @@ pub fn auto_zoom(project: &Project, log: &EventLog) -> Vec<Zoom> {
     // A lone inferred click is too weak a signal to move the camera for.
     groups.retain(|g| g.len() >= 2 || !g[0].inferred);
 
-    let mut segments: Vec<(f64, f64, Point)> = Vec::new();
+    // (start, end, first point, end of last activity)
+    let mut segments: Vec<(f64, f64, Point, f64)> = Vec::new();
     for g in groups {
         let start = (g[0].t - ease_in * LEAD_IN).max(0.0);
         let end = (last_end(&g) + HOLD_AFTER_MS + ease_out).min(duration);
         match segments.last_mut() {
-            Some(prev) if start - prev.1 < MIN_GAP_MS => prev.1 = end.max(prev.1),
-            _ => segments.push((start, end, g[0])),
+            Some(prev) if start < prev.1 => {
+                // The previous zoom would still be on screen. If there is
+                // room, shorten its hold so it is fully out when this one
+                // starts; otherwise join the two instead of bouncing.
+                if g[0].t - prev.3 >= MIN_HOLD_MS + ease_out + ease_in * LEAD_IN {
+                    prev.1 = start;
+                    segments.push((start, end, g[0], last_end(&g)));
+                } else {
+                    prev.1 = end.max(prev.1);
+                    prev.3 = last_end(&g);
+                }
+            }
+            _ => segments.push((start, end, g[0], last_end(&g))),
         }
     }
 
     let manual = result.clone();
     let mut n = 0;
-    for (start, end, first) in segments {
+    for (start, end, first, _) in segments {
         if end - start < ease_in + ease_out {
             continue; // squeezed against the end of the recording
         }
@@ -209,13 +221,27 @@ mod tests {
     }
 
     #[test]
+    fn merge_gap_controls_how_eagerly_clicks_join() {
+        let mut p = project(1920, 1080, 30_000.0);
+        let l = log(vec![click(2000.0, 100.0, 100.0), click(4000.0, 300.0, 200.0), click(4600.0, 900.0, 500.0)]);
+        assert_eq!(auto_zoom(&p, &l).len(), 1);
+        p.auto_zoom.merge_gap_ms = 1000.0;
+        let z = auto_zoom(&p, &l);
+        assert_eq!(z.len(), 2, "{z:?}");
+        // The first zoom gives up part of its hold to be out in time.
+        assert_eq!(z[0].end_ms, 4000.0 - 450.0);
+        assert_eq!(z[1].start_ms, 3550.0);
+        assert_eq!(z[1].end_ms, 4600.0 + 1600.0);
+    }
+
+    #[test]
     fn segments_never_overlap() {
         let mut p = project(1920, 1080, 60_000.0);
         p.auto_zoom.merge_gap_ms = 500.0;
         let ev: Vec<Event> = (0..30).map(|i| click(1000.0 + i as f64 * 1700.0, 500.0, 500.0)).collect();
         let z = auto_zoom(&p, &log(ev));
         for w in z.windows(2) {
-            assert!(w[0].end_ms + MIN_GAP_MS <= w[1].start_ms, "{w:?}");
+            assert!(w[0].end_ms <= w[1].start_ms, "{w:?}");
         }
     }
 }

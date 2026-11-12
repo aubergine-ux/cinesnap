@@ -165,7 +165,7 @@ fn draw_background(project: &Project, layout: &Layout, assets: &Path) -> Pixmap 
             let file = if Path::new(path).is_absolute() { path.into() } else { assets.join(path) };
             match load_cover(&file, w, h, sigma) {
                 Some(mut px) => {
-                    px.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+                    px.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p[3] = 255);
                     pm.data_mut().copy_from_slice(&px);
                     return pm;
                 }
@@ -198,7 +198,7 @@ impl Compositor {
             let mut a = m.data().to_vec();
             blur_alpha(&mut a, w, h, 20.0 * layout.s);
             let strength = project.frame.shadow * 0.6;
-            for (px, &cov) in base.data_mut().chunks_exact_mut(4).zip(&a) {
+            for (px, &cov) in base.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(&a) {
                 let k = 1.0 - cov as f64 / 255.0 * strength;
                 for c in &mut px[..3] {
                     *c = (*c as f64 * k) as u8;
@@ -317,7 +317,7 @@ impl Compositor {
                     let dst = &mut out[o..o + slot.side * 4];
                     let src = &cam[row * slot.side * 4..(row + 1) * slot.side * 4];
                     let m = &slot.mask[row * slot.side..(row + 1) * slot.side];
-                    for ((d, s), &m) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)).zip(m) {
+                    for ((d, s), &m) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.chunks_exact(4)).zip(m) {
                         blend(d, s, m as u32);
                     }
                 }
@@ -477,7 +477,7 @@ mod tests {
     fn crop_restricts_the_source() {
         let (c, mut out) = setup(|p| p.crop = Rect { x: 100.0, y: 0.0, width: 100.0, height: 100.0 });
         // Frames handed to the compositor are already cropped.
-        let src: Vec<u8> = std::iter::repeat([0u8, 0, 255, 255]).take(100 * 100).flatten().collect();
+        let src: Vec<u8> = std::iter::repeat_n([0u8, 0, 255, 255], 100 * 100).flatten().collect();
         let c2 = Compositor { src_w: 100, src_h: 100, ..c };
         out.resize(c2.frame_bytes(), 0);
         c2.render(&mut out, &input(&src, (150.0, 50.0, 1.0)));
@@ -522,7 +522,7 @@ mod tests {
         });
         let src = source();
         let side = c.webcam_side().unwrap();
-        let cam_px: Vec<u8> = std::iter::repeat([255u8, 255, 0, 255]).take(side * side).flatten().collect();
+        let cam_px: Vec<u8> = std::iter::repeat_n([255u8, 255, 0, 255], side * side).flatten().collect();
         c.render(&mut out, &FrameInput { webcam: Some(&cam_px), ..input(&src, (100.0, 50.0, 1.0)) });
         let l = *c.layout();
         let margin = (0.03 * 720.0f64).round() as u32;

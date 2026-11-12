@@ -31,6 +31,8 @@ pub struct MotionTracks {
     pub events: EventMarks,
     /// Whether the cursor should be drawn at all for this recording.
     pub draw_cursor: bool,
+    /// `metadata`, `embedded` or `none`, from the event log header.
+    pub cursor_mode: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -61,7 +63,7 @@ impl MotionTracks {
 
 pub fn compute_motion(project: &Project, log: &EventLog) -> MotionTracks {
     let duration = project.source.video.duration_ms;
-    let fps = project.export.fps.max(1);
+    let fps = crate::layout::output_fps(project);
     let kept = Kept::new(duration, &project.cuts);
     let out_duration = kept.duration_ms();
     let frames = (out_duration * fps as f64 / 1000.0).round() as usize;
@@ -108,6 +110,7 @@ pub fn compute_motion(project: &Project, log: &EventLog) -> MotionTracks {
         ripples,
         events,
         draw_cursor: project.cursor.show && log.header.can_draw_cursor(),
+        cursor_mode: log.header.cursor.clone(),
     }
 }
 

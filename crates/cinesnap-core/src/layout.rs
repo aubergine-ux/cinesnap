@@ -52,6 +52,18 @@ pub fn output_size(preset: &str, ratio: f64) -> (u32, u32) {
     }
 }
 
+/// Output frame rate: GIF presets carry their own, video uses the setting.
+pub fn output_fps(project: &Project) -> u32 {
+    if project.export.format == "gif" {
+        match project.export.preset.as_str() {
+            "readme" => return 15,
+            "small" => return 12,
+            _ => {}
+        }
+    }
+    project.export.fps.max(1)
+}
+
 impl Layout {
     pub fn new(project: &Project) -> Self {
         let ratio = aspect_ratio(&project.frame.aspect, project.crop);

@@ -2,13 +2,13 @@
 //! compositor and the export pipeline. Nothing here depends on the GUI.
 
 pub mod events;
-//pub mod export;
-//pub mod ffmpeg;
+pub mod export;
+pub mod ffmpeg;
 pub mod layout;
 pub mod motion;
 pub mod project;
 pub mod render;
-//pub mod synth;
+pub mod synth;
 
 #[cfg(test)]
 pub(crate) mod testutil {

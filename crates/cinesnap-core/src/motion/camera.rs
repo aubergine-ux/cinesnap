@@ -6,8 +6,11 @@ use crate::project::{Easing, Rect, Zoom, ZoomMode};
 /// How much of the zoomed view the cursor may roam before the camera follows
 /// (half extent, as a fraction of the view size).
 const DEAD_ZONE: f64 = 0.22;
-/// Natural frequency of the follow spring, rad/s. Critically damped.
-const FOLLOW_OMEGA: f64 = 5.0;
+/// Time constant of the smoothing applied to the follow target.
+const FOLLOW_TAU_MS: f64 = 170.0;
+/// The cursor is never allowed further than this from the view centre
+/// (fraction of the view size), however fast it moves.
+const KEEP_IN_VIEW: f64 = 0.40;
 
 #[derive(Clone, Debug)]
 pub struct CameraPath {
@@ -60,7 +63,6 @@ pub fn camera_path(zooms: &[Zoom], cursor: &CursorPath, crop: Rect, duration_ms:
     smooth_zero_phase(&mut fx, 220.0);
     smooth_zero_phase(&mut fy, 220.0);
 
-    let dt = STEP_MS / 1000.0;
     for z in zooms {
         if z.scale <= 1.0 || z.end_ms <= z.start_ms {
             continue;
@@ -70,13 +72,16 @@ pub fn camera_path(zooms: &[Zoom], cursor: &CursorPath, crop: Rect, duration_ms:
         let (view_w, view_h) = (crop.width / z.scale, crop.height / z.scale);
         let (dzx, dzy) = (view_w * DEAD_ZONE, view_h * DEAD_ZONE);
 
-        let mut target = (z.x, z.y);
-        let mut pos = target;
-        let mut vel = (0.0, 0.0);
-        for i in i0..=i1 {
-            let t = i as f64 * STEP_MS;
-            if z.mode == ZoomMode::Follow && i < fx.len() {
-                // Push the target only when the cursor leaves the dead zone.
+        // Focus point per step. In follow mode the target only moves when the
+        // cursor leaves the dead zone; it is then smoothed without lag (the
+        // whole path is known up front, so the camera can start moving a
+        // moment before the cursor gets there instead of chasing it).
+        let len = i1 - i0 + 1;
+        let mut px = vec![z.x; len];
+        let mut py = vec![z.y; len];
+        if z.mode == ZoomMode::Follow {
+            let mut target = (z.x, z.y);
+            for (j, i) in (i0..=i1).enumerate() {
                 let (dx, dy) = (fx[i] - target.0, fy[i] - target.1);
                 if dx.abs() > dzx {
                     target.0 += dx - dzx * dx.signum();
@@ -84,14 +89,21 @@ pub fn camera_path(zooms: &[Zoom], cursor: &CursorPath, crop: Rect, duration_ms:
                 if dy.abs() > dzy {
                     target.1 += dy - dzy * dy.signum();
                 }
-                // Critically damped spring towards the target.
-                let w = FOLLOW_OMEGA;
-                vel.0 += (w * w * (target.0 - pos.0) - 2.0 * w * vel.0) * dt;
-                vel.1 += (w * w * (target.1 - pos.1) - 2.0 * w * vel.1) * dt;
-                pos.0 += vel.0 * dt;
-                pos.1 += vel.1 * dt;
+                px[j] = target.0;
+                py[j] = target.1;
             }
+            smooth_zero_phase(&mut px, FOLLOW_TAU_MS);
+            smooth_zero_phase(&mut py, FOLLOW_TAU_MS);
+            for (j, i) in (i0..=i1).enumerate() {
+                let (mx, my) = (view_w * KEEP_IN_VIEW, view_h * KEEP_IN_VIEW);
+                px[j] = px[j].clamp(cursor.x[i] - mx, cursor.x[i] + mx);
+                py[j] = py[j].clamp(cursor.y[i] - my, cursor.y[i] + my);
+            }
+        }
 
+        for (j, i) in (i0..=i1).enumerate() {
+            let t = i as f64 * STEP_MS;
+            let pos = (px[j], py[j]);
             let e = progress(z, t);
             let s = (z.scale.ln() * e).exp();
             if s <= scale[i] {
