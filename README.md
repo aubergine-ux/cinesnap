@@ -161,6 +161,8 @@ There is also a CLI for rendering without the app:
 cinesnap-cli render "My demo.cinesnap" -o demo.mp4
 cinesnap-cli render "My demo.cinesnap" -o demo.gif
 cinesnap-cli render "My demo.cinesnap" -o short.mp4 --aspect 9:16
+
+cinesnap doctor        # what this machine supports: capture, cursor, clicks, encoder
 ```
 
 More in [docs/architecture.md](docs/architecture.md).

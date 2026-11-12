@@ -143,11 +143,14 @@ cinesnap-cli render "My demo.cinesnap" -o demo.mp4
 cinesnap-cli render "My demo.cinesnap" -o demo.gif
 cinesnap-cli render "My demo.cinesnap" -o short.mp4 --aspect 9:16 --preset 1080p
 
+# open a recording straight in the editor
+cinesnap "My demo.cinesnap"
+
 # record five seconds without opening the window
 cinesnap record out.cinesnap --seconds 5
 
-# which ffmpeg and encoder will be used
-cinesnap-cli doctor</code></pre>
+# what this machine supports: capture, cursor, clicks, encoder, devices
+cinesnap doctor</code></pre>
   <p class="lead">The bundle layout and the event log are documented in <a href="https://github.com/aubergine-ux/cinesnap/blob/main/docs/recording-format.md">recording-format.md</a>; the design is in <a href="https://github.com/aubergine-ux/cinesnap/blob/main/docs/architecture.md">architecture.md</a>.</p>
 </div></section>
 
@@ -156,7 +159,7 @@ cinesnap-cli doctor</code></pre>
   <div class="grid">
     <div class="card"><h3>No zooms were generated</h3><p>No clicks were seen. On Wayland, check the note on the start screen about the <code>input</code> group. You can always add zooms by double-clicking the zoom track.</p></div>
     <div class="card"><h3>The cursor is small and jittery</h3><p>Your compositor's portal does not provide cursor metadata, so the system cursor was recorded into the video and cannot be redrawn. Zooms and framing still work.</p></div>
-    <div class="card"><h3>Preview is black on Linux</h3><p>Install the GStreamer H.264 decoder (<code>gst-libav</code>). Exports are unaffected because they do not go through the web view.</p></div>
+    <div class="card"><h3>Preview is black on Linux</h3><p>Install the GStreamer H.264 decoder (<code>gst-libav</code>). Start Cinesnap from a terminal to see the reason: a line starting with <code>ui: video error</code>. Exports are unaffected because they do not go through the web view.</p></div>
     <div class="card"><h3>Export fails with a hardware encoder</h3><p>Start Cinesnap with <code>CINESNAP_ENCODER=libx264</code>. For VA-API on a non-default GPU set <code>CINESNAP_VAAPI_DEVICE</code>.</p></div>
     <div class="card"><h3>macOS records a black screen</h3><p>Grant Screen Recording permission to Cinesnap in System Settings → Privacy &amp; Security, then restart the app.</p></div>
     <div class="card"><h3>A recorded window moved</h3><p>On Windows, macOS and X11 a window is recorded as the part of the screen it occupied when recording started. Keep it in place, or record the screen and crop.</p></div>
