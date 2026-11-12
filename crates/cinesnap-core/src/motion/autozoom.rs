@@ -36,7 +36,13 @@ fn interest_points(project: &Project, log: &EventLog) -> Vec<Point> {
 
     let flush = |burst: &mut Vec<f64>, pos: (f64, f64), points: &mut Vec<Point>| {
         if burst.len() >= TYPING_MIN_KEYS {
-            points.push(Point { t: burst[0], end: *burst.last().unwrap(), x: pos.0, y: pos.1, inferred: false });
+            points.push(Point {
+                t: burst[0],
+                end: *burst.last().unwrap(),
+                x: pos.0,
+                y: pos.1,
+                inferred: false,
+            });
         }
         burst.clear();
     };
@@ -48,7 +54,13 @@ fn interest_points(project: &Project, log: &EventLog) -> Vec<Point> {
         match e.kind {
             EventKind::Down { x, y, inferred, .. } => {
                 flush(&mut burst, burst_pos, &mut points);
-                points.push(Point { t: e.t, end: e.t, x, y, inferred });
+                points.push(Point {
+                    t: e.t,
+                    end: e.t,
+                    x,
+                    y,
+                    inferred,
+                });
             }
             EventKind::Key if project.auto_zoom.on_typing => {
                 if burst.last().is_some_and(|&t| e.t - t > TYPING_GAP_MS) {
@@ -150,19 +162,37 @@ mod tests {
     use crate::testutil::project;
 
     fn click(t: f64, x: f64, y: f64) -> Event {
-        Event { t, kind: EventKind::Down { b: Button::Left, x, y, inferred: false } }
+        Event {
+            t,
+            kind: EventKind::Down {
+                b: Button::Left,
+                x,
+                y,
+                inferred: false,
+            },
+        }
     }
     fn key(t: f64) -> Event {
-        Event { t, kind: EventKind::Key }
+        Event {
+            t,
+            kind: EventKind::Key,
+        }
     }
     fn log(events: Vec<Event>) -> EventLog {
-        EventLog { header: Header::new(1920, 1080, "exact", "metadata"), events }
+        EventLog {
+            header: Header::new(1920, 1080, "exact", "metadata"),
+            events,
+        }
     }
 
     #[test]
     fn nearby_clicks_merge_distant_ones_do_not() {
         let p = project(1920, 1080, 30_000.0);
-        let l = log(vec![click(2000.0, 100.0, 100.0), click(3500.0, 300.0, 200.0), click(12_000.0, 900.0, 500.0)]);
+        let l = log(vec![
+            click(2000.0, 100.0, 100.0),
+            click(3500.0, 300.0, 200.0),
+            click(12_000.0, 900.0, 500.0),
+        ]);
         let z = auto_zoom(&p, &l);
         assert_eq!(z.len(), 2);
         assert_eq!(z[0].start_ms, 2000.0 - 450.0);
@@ -197,33 +227,81 @@ mod tests {
     fn manual_segments_survive_and_block_overlaps() {
         let mut p = project(1920, 1080, 30_000.0);
         p.zooms.push(Zoom {
-            id: "mine".into(), start_ms: 1000.0, end_ms: 5000.0, scale: 3.0,
-            ease_in_ms: 100.0, ease_out_ms: 100.0, easing: Easing::Linear, mode: ZoomMode::Fixed,
-            x: 5.0, y: 5.0, manual: true,
+            id: "mine".into(),
+            start_ms: 1000.0,
+            end_ms: 5000.0,
+            scale: 3.0,
+            ease_in_ms: 100.0,
+            ease_out_ms: 100.0,
+            easing: Easing::Linear,
+            mode: ZoomMode::Fixed,
+            x: 5.0,
+            y: 5.0,
+            manual: true,
         });
-        p.zooms.push(Zoom { id: "auto-9".into(), manual: false, start_ms: 20_000.0, end_ms: 22_000.0, ..p.zooms[0].clone() });
-        let z = auto_zoom(&p, &log(vec![click(2000.0, 100.0, 100.0), click(12_000.0, 900.0, 500.0)]));
-        assert_eq!(z.iter().map(|z| z.id.as_str()).collect::<Vec<_>>(), ["mine", "auto-1"]);
+        p.zooms.push(Zoom {
+            id: "auto-9".into(),
+            manual: false,
+            start_ms: 20_000.0,
+            end_ms: 22_000.0,
+            ..p.zooms[0].clone()
+        });
+        let z = auto_zoom(
+            &p,
+            &log(vec![
+                click(2000.0, 100.0, 100.0),
+                click(12_000.0, 900.0, 500.0),
+            ]),
+        );
+        assert_eq!(
+            z.iter().map(|z| z.id.as_str()).collect::<Vec<_>>(),
+            ["mine", "auto-1"]
+        );
         assert_eq!(z[1].start_ms, 11_550.0);
 
         p.auto_zoom.enabled = false;
-        assert_eq!(auto_zoom(&p, &log(vec![click(12_000.0, 1.0, 1.0)])).len(), 1);
+        assert_eq!(
+            auto_zoom(&p, &log(vec![click(12_000.0, 1.0, 1.0)])).len(),
+            1
+        );
     }
 
     #[test]
     fn ignores_cut_out_of_crop_and_lone_inferred_clicks() {
         let mut p = project(1920, 1080, 30_000.0);
-        p.cuts.push(Cut { start_ms: 0.0, end_ms: 4000.0 });
+        p.cuts.push(Cut {
+            start_ms: 0.0,
+            end_ms: 4000.0,
+        });
         p.crop.width = 960.0;
-        let lone = Event { t: 20_000.0, kind: EventKind::Down { b: Button::Left, x: 10.0, y: 10.0, inferred: true } };
-        let z = auto_zoom(&p, &log(vec![click(2000.0, 100.0, 100.0), click(10_000.0, 1500.0, 100.0), lone]));
+        let lone = Event {
+            t: 20_000.0,
+            kind: EventKind::Down {
+                b: Button::Left,
+                x: 10.0,
+                y: 10.0,
+                inferred: true,
+            },
+        };
+        let z = auto_zoom(
+            &p,
+            &log(vec![
+                click(2000.0, 100.0, 100.0),
+                click(10_000.0, 1500.0, 100.0),
+                lone,
+            ]),
+        );
         assert!(z.is_empty(), "{z:?}");
     }
 
     #[test]
     fn merge_gap_controls_how_eagerly_clicks_join() {
         let mut p = project(1920, 1080, 30_000.0);
-        let l = log(vec![click(2000.0, 100.0, 100.0), click(4000.0, 300.0, 200.0), click(4600.0, 900.0, 500.0)]);
+        let l = log(vec![
+            click(2000.0, 100.0, 100.0),
+            click(4000.0, 300.0, 200.0),
+            click(4600.0, 900.0, 500.0),
+        ]);
         assert_eq!(auto_zoom(&p, &l).len(), 1);
         p.auto_zoom.merge_gap_ms = 1000.0;
         let z = auto_zoom(&p, &l);
@@ -238,7 +316,9 @@ mod tests {
     fn segments_never_overlap() {
         let mut p = project(1920, 1080, 60_000.0);
         p.auto_zoom.merge_gap_ms = 500.0;
-        let ev: Vec<Event> = (0..30).map(|i| click(1000.0 + i as f64 * 1700.0, 500.0, 500.0)).collect();
+        let ev: Vec<Event> = (0..30)
+            .map(|i| click(1000.0 + i as f64 * 1700.0, 500.0, 500.0))
+            .collect();
         let z = auto_zoom(&p, &log(ev));
         for w in z.windows(2) {
             assert!(w[0].end_ms <= w[1].start_ms, "{w:?}");

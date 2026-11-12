@@ -168,7 +168,12 @@ pub struct AutoZoom {
 
 impl Default for AutoZoom {
     fn default() -> Self {
-        Self { enabled: true, scale: 2.0, merge_gap_ms: 2500.0, on_typing: true }
+        Self {
+            enabled: true,
+            scale: 2.0,
+            merge_gap_ms: 2500.0,
+            on_typing: true,
+        }
     }
 }
 
@@ -264,7 +269,12 @@ pub struct WebcamStyle {
 
 impl Default for WebcamStyle {
     fn default() -> Self {
-        Self { show: true, corner: "bottom-right".into(), size: 0.18, shape: "circle".into() }
+        Self {
+            show: true,
+            corner: "bottom-right".into(),
+            size: 0.18,
+            shape: "circle".into(),
+        }
     }
 }
 
@@ -279,7 +289,12 @@ pub struct ExportSettings {
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        Self { format: "mp4".into(), preset: "1080p".into(), fps: 60, quality: "high".into() }
+        Self {
+            format: "mp4".into(),
+            preset: "1080p".into(),
+            fps: 60,
+            quality: "high".into(),
+        }
     }
 }
 
@@ -338,7 +353,10 @@ impl Project {
     /// Clamp edit state into a valid range so downstream math never sees
     /// nonsense (hand-edited files, older versions, UI bugs).
     pub fn sanitize(&mut self) {
-        let (w, h) = (self.source.video.width as f64, self.source.video.height as f64);
+        let (w, h) = (
+            self.source.video.width as f64,
+            self.source.video.height as f64,
+        );
         let c = &mut self.crop;
         c.x = c.x.clamp(0.0, (w - 2.0).max(0.0));
         c.y = c.y.clamp(0.0, (h - 2.0).max(0.0));

@@ -29,7 +29,9 @@ pub fn locate(data_dir: Option<&Path>) -> Option<PathBuf> {
         }
     }
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|d| d.join(exe_name())).find(|p| p.is_file())
+    std::env::split_paths(&path)
+        .map(|d| d.join(exe_name()))
+        .find(|p| p.is_file())
 }
 
 /// A `Command` for ffmpeg that never pops up a console window on Windows.
@@ -44,10 +46,28 @@ pub fn command(ffmpeg: &Path) -> Command {
     c
 }
 
+/// Like [`command`], but ffmpeg keeps reading stdin so it can be stopped
+/// gracefully by sending `q`.
+pub fn command_interactive(ffmpeg: &Path) -> Command {
+    let mut c = Command::new(ffmpeg);
+    c.arg("-hide_banner");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    c
+}
+
 pub fn version(ffmpeg: &Path) -> Option<String> {
     let out = command(ffmpeg).arg("-version").output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
-    text.lines().next()?.strip_prefix("ffmpeg version ")?.split_whitespace().next().map(str::to_owned)
+    text.lines()
+        .next()?
+        .strip_prefix("ffmpeg version ")?
+        .split_whitespace()
+        .next()
+        .map(str::to_owned)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,21 +157,54 @@ impl Encoder {
         let q = quality.q().to_string();
         let v: Vec<&str> = match self {
             Self::Nvenc => vec![
-                "-c:v", "h264_nvenc", "-preset", if fast { "p2" } else { "p5" }, "-rc", "vbr", "-cq", &q, "-b:v", "0",
-                "-pix_fmt", "yuv420p",
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                if fast { "p2" } else { "p5" },
+                "-rc",
+                "vbr",
+                "-cq",
+                &q,
+                "-b:v",
+                "0",
+                "-pix_fmt",
+                "yuv420p",
             ],
             Self::VideoToolbox => {
                 // VideoToolbox quality runs 1..100, higher is better.
                 let vq = (100 - quality.q() * 2).to_string();
-                return ["-c:v", "h264_videotoolbox", "-q:v", &vq, "-pix_fmt", "yuv420p"].map(String::from).to_vec();
+                return [
+                    "-c:v",
+                    "h264_videotoolbox",
+                    "-q:v",
+                    &vq,
+                    "-pix_fmt",
+                    "yuv420p",
+                ]
+                .map(String::from)
+                .to_vec();
             }
-            Self::Qsv => vec!["-c:v", "h264_qsv", "-global_quality", &q, "-pix_fmt", "nv12"],
+            Self::Qsv => vec![
+                "-c:v",
+                "h264_qsv",
+                "-global_quality",
+                &q,
+                "-pix_fmt",
+                "nv12",
+            ],
             Self::Amf => vec![
-                "-c:v", "h264_amf", "-rc", "cqp", "-qp_i", &q, "-qp_p", &q, "-qp_b", &q, "-pix_fmt", "yuv420p",
+                "-c:v", "h264_amf", "-rc", "cqp", "-qp_i", &q, "-qp_p", &q, "-qp_b", &q,
+                "-pix_fmt", "yuv420p",
             ],
             Self::Vaapi => vec!["-c:v", "h264_vaapi", "-qp", &q],
             Self::X264 => vec![
-                "-c:v", "libx264", "-preset", if fast { "ultrafast" } else { "medium" }, "-crf", &q, "-pix_fmt",
+                "-c:v",
+                "libx264",
+                "-preset",
+                if fast { "ultrafast" } else { "medium" },
+                "-crf",
+                &q,
+                "-pix_fmt",
                 "yuv420p",
             ],
         };
@@ -163,11 +216,19 @@ impl Encoder {
     pub fn works(self, ffmpeg: &Path) -> bool {
         let mut c = command(ffmpeg);
         c.args(["-v", "error"]).args(self.global_args());
-        c.args(["-f", "lavfi", "-i", "color=black:s=640x360:r=30", "-frames:v", "5"]);
+        c.args([
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=640x360:r=30",
+            "-frames:v",
+            "5",
+        ]);
         if let Some(f) = self.filter() {
             c.args(["-vf", f]);
         }
-        c.args(self.codec_args(Quality::Medium, true)).args(["-f", "null", "-"]);
+        c.args(self.codec_args(Quality::Medium, true))
+            .args(["-f", "null", "-"]);
         c.stdout(Stdio::null()).stderr(Stdio::null());
         c.status().map(|s| s.success()).unwrap_or(false)
     }
@@ -175,12 +236,23 @@ impl Encoder {
     /// The best working H.264 encoder on this machine.
     pub fn detect(ffmpeg: &Path) -> Encoder {
         if let Ok(forced) = std::env::var("CINESNAP_ENCODER") {
-            let all = [Self::Nvenc, Self::VideoToolbox, Self::Qsv, Self::Amf, Self::Vaapi, Self::X264];
+            let all = [
+                Self::Nvenc,
+                Self::VideoToolbox,
+                Self::Qsv,
+                Self::Amf,
+                Self::Vaapi,
+                Self::X264,
+            ];
             if let Some(e) = all.into_iter().find(|e| e.name() == forced) {
                 return e;
             }
         }
-        Self::candidates().iter().copied().find(|e| e.works(ffmpeg)).unwrap_or(Self::X264)
+        Self::candidates()
+            .iter()
+            .copied()
+            .find(|e| e.works(ffmpeg))
+            .unwrap_or(Self::X264)
     }
 }
 
@@ -224,9 +296,16 @@ impl ErrorLog {
 
 /// Run to completion, failing with ffmpeg's stderr.
 pub fn run(mut c: Command, what: &str) -> Result<()> {
-    let out = c.stdout(Stdio::null()).stderr(Stdio::piped()).output().with_context(|| format!("starting ffmpeg ({what})"))?;
+    let out = c
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("starting ffmpeg ({what})"))?;
     if !out.status.success() {
-        bail!("ffmpeg failed ({what}): {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "ffmpeg failed ({what}): {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(())
 }
@@ -242,7 +321,11 @@ pub struct MediaInfo {
 /// Read size, frame rate and duration of a video file by parsing
 /// `ffmpeg -i` (ffprobe is not always shipped next to ffmpeg).
 pub fn probe(ffmpeg: &Path, file: &Path) -> Result<MediaInfo> {
-    let out = command(ffmpeg).arg("-i").arg(file).output().context("starting ffmpeg")?;
+    let out = command(ffmpeg)
+        .arg("-i")
+        .arg(file)
+        .output()
+        .context("starting ffmpeg")?;
     let text = String::from_utf8_lossy(&out.stderr);
     parse_probe(&text).with_context(|| format!("could not read video info from {}", file.display()))
 }
@@ -250,14 +333,22 @@ pub fn probe(ffmpeg: &Path, file: &Path) -> Result<MediaInfo> {
 fn parse_probe(text: &str) -> Option<MediaInfo> {
     let dur = text.split("Duration: ").nth(1)?.split(',').next()?.trim();
     let mut parts = dur.split(':');
-    let (h, m, s) = (parts.next()?.parse::<f64>().ok()?, parts.next()?.parse::<f64>().ok()?, parts.next()?.parse::<f64>().ok()?);
+    let (h, m, s) = (
+        parts.next()?.parse::<f64>().ok()?,
+        parts.next()?.parse::<f64>().ok()?,
+        parts.next()?.parse::<f64>().ok()?,
+    );
     let line = text.lines().find(|l| l.contains("Video:"))?;
     let (mut size, mut fps) = (None, None);
     for tok in line.split(',') {
         let tok = tok.trim();
         if size.is_none() {
             // "1920x1080" possibly followed by " [SAR ...]"
-            if let Some((w, h)) = tok.split_whitespace().next().and_then(|t| t.split_once('x')) {
+            if let Some((w, h)) = tok
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.split_once('x'))
+            {
                 if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
                     size = Some((w, h));
                 }
@@ -268,7 +359,12 @@ fn parse_probe(text: &str) -> Option<MediaInfo> {
         }
     }
     let (width, height) = size?;
-    Some(MediaInfo { width, height, fps: fps?, duration_ms: (h * 3600.0 + m * 60.0 + s) * 1000.0 })
+    Some(MediaInfo {
+        width,
+        height,
+        fps: fps?,
+        duration_ms: (h * 3600.0 + m * 60.0 + s) * 1000.0,
+    })
 }
 
 /// Sequential raw-RGBA frame reader over an ffmpeg decode process.
@@ -285,19 +381,35 @@ pub struct FrameReader {
 impl FrameReader {
     /// `filter` must produce frames of exactly `width × height` at a constant
     /// frame rate. `seek_ms` skips the start of the file.
-    pub fn open(ffmpeg: &Path, file: &Path, filter: &str, width: usize, height: usize, seek_ms: f64) -> Result<Self> {
+    pub fn open(
+        ffmpeg: &Path,
+        file: &Path,
+        filter: &str,
+        width: usize,
+        height: usize,
+        seek_ms: f64,
+    ) -> Result<Self> {
         let mut c = command(ffmpeg);
         c.args(["-v", "error"]);
         if seek_ms > 0.0 {
             c.args(["-ss", &format!("{:.3}", seek_ms / 1000.0)]);
         }
         c.arg("-i").arg(file);
-        c.args(["-an", "-vf", filter, "-pix_fmt", "rgba", "-f", "rawvideo", "-"]);
+        c.args([
+            "-an", "-vf", filter, "-pix_fmt", "rgba", "-f", "rawvideo", "-",
+        ]);
         c.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = c.spawn().context("starting ffmpeg decoder")?;
         let out = child.stdout.take().unwrap();
         let errors = ErrorLog::attach(&mut child);
-        Ok(Self { child, out, errors, frame: vec![0; width * height * 4], index: None, eof: false })
+        Ok(Self {
+            child,
+            out,
+            errors,
+            frame: vec![0; width * height * 4],
+            index: None,
+            eof: false,
+        })
     }
 
     /// The frame with the given index. Indices must not decrease between
@@ -343,15 +455,46 @@ impl FrameWriter {
         global: &[String],
         build: impl FnOnce(&mut Command),
     ) -> Result<Self> {
+        Self::spawn_fmt(ffmpeg, "rgba", width, height, fps, global, build)
+    }
+
+    /// Like [`spawn`](Self::spawn) for frames in another packed pixel format
+    /// (an ffmpeg `pix_fmt` name such as `bgr0`).
+    pub fn spawn_fmt(
+        ffmpeg: &Path,
+        pix_fmt: &str,
+        width: u32,
+        height: u32,
+        fps: f64,
+        global: &[String],
+        build: impl FnOnce(&mut Command),
+    ) -> Result<Self> {
         let mut c = command(ffmpeg);
         c.args(["-v", "error", "-y"]).args(global);
-        c.args(["-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{width}x{height}"), "-r", &format!("{fps}"), "-i", "-"]);
+        c.args([
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            pix_fmt,
+            "-s",
+            &format!("{width}x{height}"),
+            "-r",
+            &format!("{fps}"),
+            "-i",
+            "-",
+        ]);
         build(&mut c);
-        c.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        c.stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
         let mut child = c.spawn().context("starting ffmpeg encoder")?;
         let stdin = child.stdin.take();
         let errors = ErrorLog::attach(&mut child);
-        Ok(Self { child, stdin, errors })
+        Ok(Self {
+            child,
+            stdin,
+            errors,
+        })
     }
 
     pub fn write(&mut self, frame: &[u8]) -> Result<()> {
@@ -388,7 +531,15 @@ mod tests {
     #[test]
     fn parses_ffmpeg_info() {
         let text = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'video.mp4':\n  Duration: 00:01:02.50, start: 0.000000, bitrate: 812 kb/s\n  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 2560x1440 [SAR 1:1 DAR 16:9], 800 kb/s, 60 fps, 60 tbr, 15360 tbn (default)\n";
-        assert_eq!(parse_probe(text), Some(MediaInfo { width: 2560, height: 1440, fps: 60.0, duration_ms: 62_500.0 }));
+        assert_eq!(
+            parse_probe(text),
+            Some(MediaInfo {
+                width: 2560,
+                height: 1440,
+                fps: 60.0,
+                duration_ms: 62_500.0
+            })
+        );
         let ntsc = "  Duration: 00:00:01.00, start\n  Stream #0:0: Video: h264, yuv420p, 640x480, 29.97 fps, 30 tbr\n";
         assert_eq!(parse_probe(ntsc).unwrap().fps, 29.97);
         assert_eq!(parse_probe("garbage"), None);
@@ -396,7 +547,14 @@ mod tests {
 
     #[test]
     fn encoder_args_are_well_formed() {
-        for e in [Encoder::Nvenc, Encoder::VideoToolbox, Encoder::Qsv, Encoder::Amf, Encoder::Vaapi, Encoder::X264] {
+        for e in [
+            Encoder::Nvenc,
+            Encoder::VideoToolbox,
+            Encoder::Qsv,
+            Encoder::Amf,
+            Encoder::Vaapi,
+            Encoder::X264,
+        ] {
             let args = e.codec_args(Quality::High, false);
             assert_eq!(args[0], "-c:v");
             assert_eq!(args[1], e.name());

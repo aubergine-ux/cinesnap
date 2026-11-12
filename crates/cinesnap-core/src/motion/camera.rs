@@ -23,7 +23,11 @@ pub struct CameraPath {
 
 impl CameraPath {
     pub fn sample(&self, t_ms: f64) -> (f64, f64, f64) {
-        (sample(&self.cx, t_ms), sample(&self.cy, t_ms), sample(&self.scale, t_ms))
+        (
+            sample(&self.cx, t_ms),
+            sample(&self.cy, t_ms),
+            sample(&self.scale, t_ms),
+        )
     }
 }
 
@@ -45,12 +49,25 @@ fn progress(z: &Zoom, t: f64) -> f64 {
     // If the ramps do not fit, shrink both proportionally.
     let fit = (len / (z.ease_in_ms + z.ease_out_ms).max(1e-9)).min(1.0);
     let (ein, eout) = (z.ease_in_ms * fit, z.ease_out_ms * fit);
-    let a = if ein > 0.0 { (t - z.start_ms) / ein } else { 1.0 };
-    let b = if eout > 0.0 { (z.end_ms - t) / eout } else { 1.0 };
+    let a = if ein > 0.0 {
+        (t - z.start_ms) / ein
+    } else {
+        1.0
+    };
+    let b = if eout > 0.0 {
+        (z.end_ms - t) / eout
+    } else {
+        1.0
+    };
     ease(z.easing, a.min(b))
 }
 
-pub fn camera_path(zooms: &[Zoom], cursor: &CursorPath, crop: Rect, duration_ms: f64) -> CameraPath {
+pub fn camera_path(
+    zooms: &[Zoom],
+    cursor: &CursorPath,
+    crop: Rect,
+    duration_ms: f64,
+) -> CameraPath {
     let n = grid_len(duration_ms);
     let (ccx, ccy) = crop.center();
     let mut cx = vec![ccx; n];
@@ -131,18 +148,35 @@ mod tests {
     use crate::events::{Event, EventKind, EventLog, Header};
     use crate::motion::cursor::cursor_path;
 
-    const CROP: Rect = Rect { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 };
+    const CROP: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
 
     fn zoom(start: f64, end: f64, x: f64, y: f64, mode: ZoomMode) -> Zoom {
         Zoom {
-            id: "z".into(), start_ms: start, end_ms: end, scale: 2.0, ease_in_ms: 600.0, ease_out_ms: 700.0,
-            easing: Easing::Smooth, mode, x, y, manual: false,
+            id: "z".into(),
+            start_ms: start,
+            end_ms: end,
+            scale: 2.0,
+            ease_in_ms: 600.0,
+            ease_out_ms: 700.0,
+            easing: Easing::Smooth,
+            mode,
+            x,
+            y,
+            manual: false,
         }
     }
     fn still_cursor(x: f64, y: f64, dur: f64) -> CursorPath {
         let log = EventLog {
             header: Header::new(1920, 1080, "exact", "metadata"),
-            events: vec![Event { t: 0.0, kind: EventKind::Move { x, y } }],
+            events: vec![Event {
+                t: 0.0,
+                kind: EventKind::Move { x, y },
+            }],
         };
         cursor_path(&log, dur, 0.5, 0.0)
     }
@@ -164,7 +198,12 @@ mod tests {
     #[test]
     fn rests_at_full_view_outside_segments() {
         let cur = still_cursor(600.0, 400.0, 10_000.0);
-        let cam = camera_path(&[zoom(2000.0, 6000.0, 600.0, 400.0, ZoomMode::Fixed)], &cur, CROP, 10_000.0);
+        let cam = camera_path(
+            &[zoom(2000.0, 6000.0, 600.0, 400.0, ZoomMode::Fixed)],
+            &cur,
+            CROP,
+            10_000.0,
+        );
         assert_eq!(cam.sample(1000.0), (960.0, 540.0, 1.0));
         assert_eq!(cam.sample(8000.0), (960.0, 540.0, 1.0));
         let (x, y, s) = cam.sample(4000.0);
@@ -177,12 +216,29 @@ mod tests {
     #[test]
     fn view_never_leaves_the_recording() {
         let cur = still_cursor(5.0, 1075.0, 10_000.0);
-        let crop = Rect { x: 100.0, y: 50.0, width: 800.0, height: 600.0 };
-        let cam = camera_path(&[zoom(500.0, 9000.0, 5.0, 1075.0, ZoomMode::Follow)], &cur, crop, 10_000.0);
+        let crop = Rect {
+            x: 100.0,
+            y: 50.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let cam = camera_path(
+            &[zoom(500.0, 9000.0, 5.0, 1075.0, ZoomMode::Follow)],
+            &cur,
+            crop,
+            10_000.0,
+        );
         for i in 0..cam.cx.len() {
-            let (hw, hh) = (crop.width / cam.scale[i] / 2.0, crop.height / cam.scale[i] / 2.0);
-            assert!(cam.cx[i] - hw >= crop.x - 1e-6 && cam.cx[i] + hw <= crop.x + crop.width + 1e-6);
-            assert!(cam.cy[i] - hh >= crop.y - 1e-6 && cam.cy[i] + hh <= crop.y + crop.height + 1e-6);
+            let (hw, hh) = (
+                crop.width / cam.scale[i] / 2.0,
+                crop.height / cam.scale[i] / 2.0,
+            );
+            assert!(
+                cam.cx[i] - hw >= crop.x - 1e-6 && cam.cx[i] + hw <= crop.x + crop.width + 1e-6
+            );
+            assert!(
+                cam.cy[i] - hh >= crop.y - 1e-6 && cam.cy[i] + hh <= crop.y + crop.height + 1e-6
+            );
         }
     }
 
@@ -192,13 +248,27 @@ mod tests {
             let log = EventLog {
                 header: Header::new(1920, 1080, "exact", "metadata"),
                 events: vec![
-                    Event { t: 0.0, kind: EventKind::Move { x: 700.0, y: 540.0 } },
-                    Event { t: 3000.0, kind: EventKind::Move { x: 700.0, y: 540.0 } },
-                    Event { t: 3400.0, kind: EventKind::Move { x: x1, y: 540.0 } },
+                    Event {
+                        t: 0.0,
+                        kind: EventKind::Move { x: 700.0, y: 540.0 },
+                    },
+                    Event {
+                        t: 3000.0,
+                        kind: EventKind::Move { x: 700.0, y: 540.0 },
+                    },
+                    Event {
+                        t: 3400.0,
+                        kind: EventKind::Move { x: x1, y: 540.0 },
+                    },
                 ],
             };
             let cur = cursor_path(&log, 10_000.0, 0.5, 0.0);
-            camera_path(&[zoom(1000.0, 9000.0, 700.0, 540.0, ZoomMode::Follow)], &cur, CROP, 10_000.0)
+            camera_path(
+                &[zoom(1000.0, 9000.0, 700.0, 540.0, ZoomMode::Follow)],
+                &cur,
+                CROP,
+                10_000.0,
+            )
         };
         // 100 px is inside the dead zone (0.22 * 960 = 211 px): camera stays.
         assert!((mk(800.0).sample(7000.0).0 - 700.0).abs() < 1.0);
@@ -210,13 +280,21 @@ mod tests {
     #[test]
     fn camera_motion_is_continuous() {
         let cur = still_cursor(300.0, 300.0, 6000.0);
-        let cam = camera_path(&[zoom(500.0, 1200.0, 300.0, 300.0, ZoomMode::Follow)], &cur, CROP, 6000.0);
+        let cam = camera_path(
+            &[zoom(500.0, 1200.0, 300.0, 300.0, ZoomMode::Follow)],
+            &cur,
+            CROP,
+            6000.0,
+        );
         for w in cam.scale.windows(2) {
             assert!((w[1] - w[0]).abs() < 0.05);
         }
         for w in cam.cx.windows(2) {
             assert!((w[1] - w[0]).abs() < 25.0);
         }
-        assert!(cam.scale.iter().cloned().fold(0.0, f64::max) > 1.2, "short segment still zooms");
+        assert!(
+            cam.scale.iter().cloned().fold(0.0, f64::max) > 1.2,
+            "short segment still zooms"
+        );
     }
 }

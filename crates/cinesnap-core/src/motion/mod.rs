@@ -68,7 +68,12 @@ pub fn compute_motion(project: &Project, log: &EventLog) -> MotionTracks {
     let out_duration = kept.duration_ms();
     let frames = (out_duration * fps as f64 / 1000.0).round() as usize;
 
-    let cursor = cursor::cursor_path(log, duration, project.cursor.smoothing, project.cursor.hide_when_idle_ms);
+    let cursor = cursor::cursor_path(
+        log,
+        duration,
+        project.cursor.smoothing,
+        project.cursor.hide_when_idle_ms,
+    );
     let camera = camera::camera_path(&project.zooms, &cursor, project.crop, duration);
 
     let mut src_ms = Vec::with_capacity(frames);
@@ -125,13 +130,41 @@ mod tests {
     fn tracks_follow_cuts() {
         let mut p = project(1920, 1080, 10_000.0);
         p.export.fps = 30;
-        p.cuts = vec![Cut { start_ms: 0.0, end_ms: 2000.0 }, Cut { start_ms: 5000.0, end_ms: 6000.0 }];
+        p.cuts = vec![
+            Cut {
+                start_ms: 0.0,
+                end_ms: 2000.0,
+            },
+            Cut {
+                start_ms: 5000.0,
+                end_ms: 6000.0,
+            },
+        ];
         let log = EventLog {
             header: Header::new(1920, 1080, "exact", "metadata"),
             events: vec![
-                Event { t: 1000.0, kind: EventKind::Down { b: Button::Left, x: 1.0, y: 1.0, inferred: false } },
-                Event { t: 7000.0, kind: EventKind::Down { b: Button::Left, x: 500.0, y: 500.0, inferred: false } },
-                Event { t: 7100.0, kind: EventKind::Key },
+                Event {
+                    t: 1000.0,
+                    kind: EventKind::Down {
+                        b: Button::Left,
+                        x: 1.0,
+                        y: 1.0,
+                        inferred: false,
+                    },
+                },
+                Event {
+                    t: 7000.0,
+                    kind: EventKind::Down {
+                        b: Button::Left,
+                        x: 500.0,
+                        y: 500.0,
+                        inferred: false,
+                    },
+                },
+                Event {
+                    t: 7100.0,
+                    kind: EventKind::Key,
+                },
             ],
         };
         p.zooms = auto_zoom(&p, &log);

@@ -70,7 +70,10 @@ mod tests {
     use super::*;
 
     fn cut(a: f64, b: f64) -> Cut {
-        Cut { start_ms: a, end_ms: b }
+        Cut {
+            start_ms: a,
+            end_ms: b,
+        }
     }
 
     #[test]
@@ -82,7 +85,15 @@ mod tests {
 
     #[test]
     fn overlapping_and_unsorted_cuts_merge() {
-        let k = Kept::new(1000.0, &[cut(600.0, 700.0), cut(100.0, 300.0), cut(250.0, 400.0), cut(900.0, 5000.0)]);
+        let k = Kept::new(
+            1000.0,
+            &[
+                cut(600.0, 700.0),
+                cut(100.0, 300.0),
+                cut(250.0, 400.0),
+                cut(900.0, 5000.0),
+            ],
+        );
         assert_eq!(k.ranges, vec![(0.0, 100.0), (400.0, 600.0), (700.0, 900.0)]);
         assert_eq!(k.duration_ms(), 500.0);
         assert_eq!(k.out_to_src(50.0), 50.0);

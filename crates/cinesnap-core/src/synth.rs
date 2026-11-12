@@ -22,7 +22,12 @@ pub struct SynthOptions {
 
 impl Default for SynthOptions {
     fn default() -> Self {
-        Self { width: 1920, height: 1080, fps: 60, baked_cursor: false }
+        Self {
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            baked_cursor: false,
+        }
     }
 }
 
@@ -40,7 +45,9 @@ const PATH: [(f64, f64, f64, bool); 6] = [
 const TYPING: (f64, f64, f64) = (5.9, 8.2, 0.115); // start, end, interval
 
 fn rand(seed: &mut u64) -> f64 {
-    *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *seed = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     ((*seed >> 33) as f64 / (1u64 << 31) as f64) - 1.0
 }
 
@@ -74,19 +81,25 @@ fn fill(pm: &mut Pixmap, x: f64, y: f64, w: f64, h: f64, r: f64, c: u32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn outline(pm: &mut Pixmap, x: f64, y: f64, w: f64, h: f64, r: f64, c: u32, width: f64) {
     if let Some(p) = rounded_rect(x as f32, y as f32, w as f32, h as f32, r as f32) {
         let mut paint = Paint::default();
         paint.set_color_rgba8((c >> 16) as u8, (c >> 8) as u8, c as u8, 255);
         paint.anti_alias = true;
-        let stroke = Stroke { width: width as f32, ..Default::default() };
+        let stroke = Stroke {
+            width: width as f32,
+            ..Default::default()
+        };
         pm.stroke_path(&p, &paint, &stroke, Transform::identity(), None);
     }
 }
 
 fn draw_ui(pm: &mut Pixmap, t: f64, k: f64) {
     const ACCENT: u32 = 0x6d5dfc;
-    let f = |pm: &mut Pixmap, x: f64, y: f64, w: f64, h: f64, r: f64, c: u32| fill(pm, x * k, y * k, w * k, h * k, r * k, c);
+    let f = |pm: &mut Pixmap, x: f64, y: f64, w: f64, h: f64, r: f64, c: u32| {
+        fill(pm, x * k, y * k, w * k, h * k, r * k, c)
+    };
     pm.fill(tiny_skia::Color::from_rgba8(0x0f, 0x11, 0x17, 255));
 
     // Sidebar.
@@ -99,18 +112,47 @@ fn draw_ui(pm: &mut Pixmap, t: f64, k: f64) {
         if i == active {
             f(pm, 24.0, y, 252.0, 60.0, 14.0, 0x2a2550);
         }
-        f(pm, 44.0, y + 18.0, 24.0, 24.0, 7.0, if i == active { ACCENT } else { 0x39405a });
-        f(pm, 86.0, y + 22.0, 90.0 + (i * 37 % 70) as f64, 16.0, 8.0, if i == active { 0xe6e8f2 } else { 0x4a5270 });
+        f(
+            pm,
+            44.0,
+            y + 18.0,
+            24.0,
+            24.0,
+            7.0,
+            if i == active { ACCENT } else { 0x39405a },
+        );
+        f(
+            pm,
+            86.0,
+            y + 22.0,
+            90.0 + (i * 37 % 70) as f64,
+            16.0,
+            8.0,
+            if i == active { 0xe6e8f2 } else { 0x4a5270 },
+        );
     }
 
     // Search box with typed "text".
     let focused = t >= PATH[3].0;
     f(pm, 360.0, 110.0, 900.0, 76.0, 18.0, 0x1b1f2d);
     if focused {
-        outline(pm, 360.0 * k, 110.0 * k, 900.0 * k, 76.0 * k, 18.0 * k, ACCENT, 3.0 * k);
+        outline(
+            pm,
+            360.0 * k,
+            110.0 * k,
+            900.0 * k,
+            76.0 * k,
+            18.0 * k,
+            ACCENT,
+            3.0 * k,
+        );
     }
     f(pm, 386.0, 134.0, 28.0, 28.0, 14.0, 0x4a5270);
-    let typed = if t < TYPING.0 { 0 } else { (((t.min(TYPING.1) - TYPING.0) / TYPING.2) as usize) + 1 };
+    let typed = if t < TYPING.0 {
+        0
+    } else {
+        (((t.min(TYPING.1) - TYPING.0) / TYPING.2) as usize) + 1
+    };
     let mut x = 436.0;
     for i in 0..typed {
         if i % 6 == 5 {
@@ -136,21 +178,49 @@ fn draw_ui(pm: &mut Pixmap, t: f64, k: f64) {
         [0x3a3f8f, 0x8f5a2f, 0x2f7a8f, 0x6a2f8f, 0x2f8f6a, 0x8f2f4b]
     };
     let selected = t >= PATH[2].0;
-    for i in 0..6 {
-        let (cx, cy) = (360.0 + (i % 3) as f64 * 512.0, 250.0 + (i / 3) as f64 * 320.0);
+    for (i, &tint) in tints.iter().enumerate() {
+        let (cx, cy) = (
+            360.0 + (i % 3) as f64 * 512.0,
+            250.0 + (i / 3) as f64 * 320.0,
+        );
         let sel = selected && i == 1;
-        f(pm, cx, cy, 480.0, 288.0, 20.0, if sel { 0x232842 } else { 0x1b1f2d });
-        f(pm, cx + 18.0, cy + 18.0, 444.0, 168.0, 12.0, tints[i]);
+        f(
+            pm,
+            cx,
+            cy,
+            480.0,
+            288.0,
+            20.0,
+            if sel { 0x232842 } else { 0x1b1f2d },
+        );
+        f(pm, cx + 18.0, cy + 18.0, 444.0, 168.0, 12.0, tint);
         f(pm, cx + 18.0, cy + 208.0, 260.0, 18.0, 9.0, 0xc9cede);
         f(pm, cx + 18.0, cy + 242.0, 180.0, 14.0, 7.0, 0x4a5270);
         if sel {
-            outline(pm, cx * k, cy * k, 480.0 * k, 288.0 * k, 20.0 * k, ACCENT, 4.0 * k);
+            outline(
+                pm,
+                cx * k,
+                cy * k,
+                480.0 * k,
+                288.0 * k,
+                20.0 * k,
+                ACCENT,
+                4.0 * k,
+            );
         }
     }
 
     // Footer button and confirmation toast.
     let done = t >= PATH[4].0;
-    f(pm, 1500.0, 910.0, 280.0, 84.0, 20.0, if done { 0x2fbf71 } else { ACCENT });
+    f(
+        pm,
+        1500.0,
+        910.0,
+        280.0,
+        84.0,
+        20.0,
+        if done { 0x2fbf71 } else { ACCENT },
+    );
     f(pm, 1570.0, 943.0, 140.0, 18.0, 9.0, 0xffffff);
     if done {
         let u = ((t - PATH[4].0 - 0.1) / 0.3).clamp(0.0, 1.0);
@@ -173,12 +243,23 @@ fn draw_cursor(pm: &mut Pixmap, x: f64, y: f64, h: f64) {
     }
     pb.close();
     if let Some(path) = pb.finish() {
-        let mut paint = Paint::default();
-        paint.anti_alias = true;
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Default::default()
+        };
         paint.set_color_rgba8(0, 0, 0, 255);
-        pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        pm.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
         paint.set_color_rgba8(255, 255, 255, 255);
-        let stroke = Stroke { width: (h * 0.07) as f32, ..Default::default() };
+        let stroke = Stroke {
+            width: (h * 0.07) as f32,
+            ..Default::default()
+        };
         pm.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
     }
 }
@@ -190,7 +271,16 @@ pub fn generate(dir: &Path, ffmpeg: &Path, opts: &SynthOptions) -> Result<Projec
     let duration_ms = DURATION_S * 1000.0;
 
     // Event log: 125 Hz samples with hand tremor.
-    let header = Header::new(opts.width, opts.height, "exact", if opts.baked_cursor { "embedded" } else { "metadata" });
+    let header = Header::new(
+        opts.width,
+        opts.height,
+        "exact",
+        if opts.baked_cursor {
+            "embedded"
+        } else {
+            "metadata"
+        },
+    );
     let mut events: Vec<Event> = Vec::new();
     let mut seed = 0x5eed_u64;
     let mut samples: Vec<(f64, f64, f64)> = Vec::new();
@@ -198,21 +288,45 @@ pub fn generate(dir: &Path, ffmpeg: &Path, opts: &SynthOptions) -> Result<Projec
     while t <= duration_ms {
         let (x, y, moving) = ideal(t / 1000.0);
         let amp = if moving { 3.2 } else { 0.5 };
-        let (x, y) = ((x + rand(&mut seed) * amp) * k, (y + rand(&mut seed) * amp) * k);
+        let (x, y) = (
+            (x + rand(&mut seed) * amp) * k,
+            (y + rand(&mut seed) * amp) * k,
+        );
         samples.push((t, x, y));
-        events.push(Event { t, kind: EventKind::Move { x, y } });
+        events.push(Event {
+            t,
+            kind: EventKind::Move { x, y },
+        });
         t += 8.0;
     }
     for &(at, x, y, click) in &PATH {
         if click {
             let (x, y) = (x * k, y * k);
-            events.push(Event { t: at * 1000.0, kind: EventKind::Down { b: Button::Left, x, y, inferred: false } });
-            events.push(Event { t: at * 1000.0 + 90.0, kind: EventKind::Up { b: Button::Left, x, y } });
+            events.push(Event {
+                t: at * 1000.0,
+                kind: EventKind::Down {
+                    b: Button::Left,
+                    x,
+                    y,
+                    inferred: false,
+                },
+            });
+            events.push(Event {
+                t: at * 1000.0 + 90.0,
+                kind: EventKind::Up {
+                    b: Button::Left,
+                    x,
+                    y,
+                },
+            });
         }
     }
     let mut kt = TYPING.0;
     while kt <= TYPING.1 {
-        events.push(Event { t: kt * 1000.0, kind: EventKind::Key });
+        events.push(Event {
+            t: kt * 1000.0,
+            kind: EventKind::Key,
+        });
         kt += TYPING.2;
     }
     events.sort_by(|a, b| a.t.total_cmp(&b.t));
@@ -224,9 +338,11 @@ pub fn generate(dir: &Path, ffmpeg: &Path, opts: &SynthOptions) -> Result<Projec
 
     // Video.
     let frames = (DURATION_S * opts.fps as f64).round() as usize;
-    let mut writer = FrameWriter::spawn(ffmpeg, opts.width, opts.height, opts.fps as f64, &[], |c| {
-        c.args(Encoder::X264.codec_args(Quality::Master, true)).arg(dir.join(VIDEO_FILE));
-    })?;
+    let mut writer =
+        FrameWriter::spawn(ffmpeg, opts.width, opts.height, opts.fps as f64, &[], |c| {
+            c.args(Encoder::X264.codec_args(Quality::Master, true))
+                .arg(dir.join(VIDEO_FILE));
+        })?;
     let mut pm = Pixmap::new(opts.width, opts.height).expect("non-zero size");
     for i in 0..frames {
         let t = i as f64 / opts.fps as f64;
@@ -250,7 +366,9 @@ pub fn generate(dir: &Path, ffmpeg: &Path, opts: &SynthOptions) -> Result<Projec
             },
             mic: None,
             webcam: None,
-            events: FileRef { file: EVENTS_FILE.into() },
+            events: FileRef {
+                file: EVENTS_FILE.into(),
+            },
             platform: "synthetic".into(),
             target: "screen".into(),
         },

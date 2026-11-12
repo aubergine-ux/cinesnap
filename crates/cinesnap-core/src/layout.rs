@@ -78,12 +78,21 @@ impl Layout {
         let pad = project.frame.padding * short;
         let (aw, ah) = ((w - 2.0 * pad).max(2.0), (h - 2.0 * pad).max(2.0));
         let crop_ratio = project.crop.width / project.crop.height;
-        let (fw, fh) = if aw / ah > crop_ratio { (ah * crop_ratio, ah) } else { (aw, aw / crop_ratio) };
+        let (fw, fh) = if aw / ah > crop_ratio {
+            (ah * crop_ratio, ah)
+        } else {
+            (aw, aw / crop_ratio)
+        };
         Self {
             width,
             height,
             s,
-            frame: Rect { x: (w - fw) / 2.0, y: (h - fh) / 2.0, width: fw, height: fh },
+            frame: Rect {
+                x: (w - fw) / 2.0,
+                y: (h - fh) / 2.0,
+                width: fw,
+                height: fh,
+            },
             radius: (project.frame.radius * s).min(fw.min(fh) / 2.0),
         }
     }
@@ -92,7 +101,12 @@ impl Layout {
 /// The part of the source visible for a camera state.
 pub fn view_rect(crop: Rect, cx: f64, cy: f64, scale: f64) -> Rect {
     let (w, h) = (crop.width / scale, crop.height / scale);
-    Rect { x: cx - w / 2.0, y: cy - h / 2.0, width: w, height: h }
+    Rect {
+        x: cx - w / 2.0,
+        y: cy - h / 2.0,
+        width: w,
+        height: h,
+    }
 }
 
 #[cfg(test)]
@@ -126,7 +140,12 @@ mod tests {
         assert!((l.frame.y + l.frame.height / 2.0 - 960.0).abs() < 1e-9);
 
         p.frame.aspect = "source".into();
-        p.crop = Rect { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+        p.crop = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        };
         assert_eq!(Layout::new(&p).width, 1080);
     }
 }

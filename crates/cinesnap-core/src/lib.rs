@@ -17,10 +17,18 @@ pub(crate) mod testutil {
     pub fn project(width: u32, height: u32, duration_ms: f64) -> Project {
         Project::new(
             Source {
-                video: VideoTrack { file: VIDEO_FILE.into(), width, height, fps: 60.0, duration_ms },
+                video: VideoTrack {
+                    file: VIDEO_FILE.into(),
+                    width,
+                    height,
+                    fps: 60.0,
+                    duration_ms,
+                },
                 mic: None,
                 webcam: None,
-                events: FileRef { file: EVENTS_FILE.into() },
+                events: FileRef {
+                    file: EVENTS_FILE.into(),
+                },
                 platform: "test".into(),
                 target: "screen".into(),
             },

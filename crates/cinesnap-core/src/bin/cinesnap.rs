@@ -16,7 +16,11 @@ use cinesnap_core::project::Project;
 use cinesnap_core::synth::{generate, SynthOptions};
 
 #[derive(Parser)]
-#[command(name = "cinesnap", version, about = "Render Cinesnap recordings from the command line")]
+#[command(
+    name = "cinesnap",
+    version,
+    about = "Render Cinesnap recordings from the command line"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -68,10 +72,20 @@ fn find_ffmpeg() -> Result<PathBuf> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Cmd::Render { project: dir, out, preset, fps, quality, aspect, software } => {
+        Cmd::Render {
+            project: dir,
+            out,
+            preset,
+            fps,
+            quality,
+            aspect,
+            software,
+        } => {
             let ffmpeg = find_ffmpeg()?;
             let mut project = Project::load(&dir)?;
-            let gif = out.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+            let gif = out
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("gif"));
             project.export.format = if gif { "gif" } else { "mp4" }.into();
             if gif {
                 project.export.preset = "readme".into();
@@ -89,17 +103,27 @@ fn main() -> Result<()> {
             if let Some(a) = aspect {
                 project.frame.aspect = a;
             }
-            let opts = ExportOptions { ffmpeg: &ffmpeg, out: &out, encoder: software.then_some(Encoder::X264) };
+            let opts = ExportOptions {
+                ffmpeg: &ffmpeg,
+                out: &out,
+                encoder: software.then_some(Encoder::X264),
+            };
             let cancel = AtomicBool::new(false);
             let mut last = usize::MAX;
-            export(&dir, &project, &opts, &mut |p| {
-                let pct = p.frame * 100 / p.total.max(1);
-                if pct != last {
-                    last = pct;
-                    eprint!("\r{:<8} {pct:>3}%", p.stage);
-                    let _ = std::io::stderr().flush();
-                }
-            }, &cancel)?;
+            export(
+                &dir,
+                &project,
+                &opts,
+                &mut |p| {
+                    let pct = p.frame * 100 / p.total.max(1);
+                    if pct != last {
+                        last = pct;
+                        eprint!("\r{:<8} {pct:>3}%", p.stage);
+                        let _ = std::io::stderr().flush();
+                    }
+                },
+                &cancel,
+            )?;
             eprintln!("\rwrote {}", out.display());
         }
         Cmd::Autozoom { project: dir } => {
@@ -109,15 +133,33 @@ fn main() -> Result<()> {
             project.save(&dir)?;
             println!("{} zoom segments", project.zooms.len());
         }
-        Cmd::Demo { dir, width, fps, baked_cursor } => {
+        Cmd::Demo {
+            dir,
+            width,
+            fps,
+            baked_cursor,
+        } => {
             let ffmpeg = find_ffmpeg()?;
             let height = (width as f64 * 9.0 / 16.0 / 2.0).round() as u32 * 2;
-            let p = generate(&dir, &ffmpeg, &SynthOptions { width, height, fps, baked_cursor })?;
+            let p = generate(
+                &dir,
+                &ffmpeg,
+                &SynthOptions {
+                    width,
+                    height,
+                    fps,
+                    baked_cursor,
+                },
+            )?;
             println!("{} ({} zoom segments)", dir.display(), p.zooms.len());
         }
         Cmd::Doctor => {
             let ffmpeg = find_ffmpeg()?;
-            println!("ffmpeg   {} ({})", ffmpeg.display(), ffmpeg::version(&ffmpeg).unwrap_or_default());
+            println!(
+                "ffmpeg   {} ({})",
+                ffmpeg.display(),
+                ffmpeg::version(&ffmpeg).unwrap_or_default()
+            );
             println!("encoder  {}", Encoder::detect(&ffmpeg).name());
         }
     }

@@ -79,8 +79,9 @@ pub fn export(
     let project = &project;
     let gif = project.export.format == "gif";
 
-    let log = EventLog::load(&project.events_path(dir))
-        .unwrap_or_else(|_| EventLog::empty(project.source.video.width, project.source.video.height));
+    let log = EventLog::load(&project.events_path(dir)).unwrap_or_else(|_| {
+        EventLog::empty(project.source.video.width, project.source.video.height)
+    });
     let tracks = compute_motion(project, &log);
     if tracks.frames == 0 {
         bail!("nothing to export: the whole recording is cut");
@@ -97,7 +98,11 @@ pub fn export(
 
     // Skip a long trimmed start instead of decoding through it.
     let first = kept.ranges.first().map_or(0.0, |r| r.0);
-    let seek_frames = if first > 1000.0 { (first * src_fps / 1000.0).floor() } else { 0.0 };
+    let seek_frames = if first > 1000.0 {
+        (first * src_fps / 1000.0).floor()
+    } else {
+        0.0
+    };
     let seek_ms = seek_frames * 1000.0 / src_fps;
 
     let filter = format!(
@@ -107,21 +112,36 @@ pub fn export(
         crop.x.round() as u32,
         crop.y.round() as u32,
     );
-    let mut video = FrameReader::open(opts.ffmpeg, &project.video_path(dir), &filter, dec_w, dec_h, seek_ms)?;
+    let mut video = FrameReader::open(
+        opts.ffmpeg,
+        &project.video_path(dir),
+        &filter,
+        dec_w,
+        dec_h,
+        seek_ms,
+    )?;
 
     let comp = Compositor::new(project, layout, dec_w, dec_h, dir);
 
     let mut webcam = match (&project.source.webcam, comp.webcam_side()) {
         (Some(track), Some(side)) => {
-            let f = format!("crop='min(iw,ih)':'min(iw,ih)',scale={side}:{side}:flags=bicubic,fps={src_fps}");
-            Some((FrameReader::open(opts.ffmpeg, &dir.join(&track.file), &f, side, side, 0.0)?, track.offset_ms))
+            let f = format!(
+                "crop='min(iw,ih)':'min(iw,ih)',scale={side}:{side}:flags=bicubic,fps={src_fps}"
+            );
+            Some((
+                FrameReader::open(opts.ffmpeg, &dir.join(&track.file), &f, side, side, 0.0)?,
+                track.offset_ms,
+            ))
         }
         _ => None,
     };
 
     let fps = tracks.fps as f64;
     let part = part_path(opts.out);
-    let tmp = tempfile::Builder::new().prefix("cinesnap-export").tempdir().context("creating temp dir")?;
+    let tmp = tempfile::Builder::new()
+        .prefix("cinesnap-export")
+        .tempdir()
+        .context("creating temp dir")?;
     let intermediate = tmp.path().join("frames.mkv");
 
     let mut writer = if gif {
@@ -131,19 +151,38 @@ pub fn export(
     } else {
         let encoder = opts.encoder.unwrap_or_else(|| Encoder::detect(opts.ffmpeg));
         let quality = Quality::parse(&project.export.quality);
-        let mic = project.source.mic.as_ref().map(|m| (dir.join(&m.file), m.offset_ms)).filter(|(p, _)| p.is_file());
-        FrameWriter::spawn(opts.ffmpeg, layout.width, layout.height, fps, &encoder.global_args(), |c| {
-            if let Some((path, offset)) = &mic {
-                c.arg("-i").arg(path);
-                c.args(["-map", "0:v", "-map", "1:a", "-af", &audio_filter(*offset, &kept)]);
-                c.args(["-c:a", "aac", "-b:a", "160k", "-shortest"]);
-            }
-            if let Some(f) = encoder.filter() {
-                c.args(["-vf", f]);
-            }
-            c.args(encoder.codec_args(quality, false));
-            c.args(["-movflags", "+faststart"]).arg(&part);
-        })?
+        let mic = project
+            .source
+            .mic
+            .as_ref()
+            .map(|m| (dir.join(&m.file), m.offset_ms))
+            .filter(|(p, _)| p.is_file());
+        FrameWriter::spawn(
+            opts.ffmpeg,
+            layout.width,
+            layout.height,
+            fps,
+            &encoder.global_args(),
+            |c| {
+                if let Some((path, offset)) = &mic {
+                    c.arg("-i").arg(path);
+                    c.args([
+                        "-map",
+                        "0:v",
+                        "-map",
+                        "1:a",
+                        "-af",
+                        &audio_filter(*offset, &kept),
+                    ]);
+                    c.args(["-c:a", "aac", "-b:a", "160k", "-shortest"]);
+                }
+                if let Some(f) = encoder.filter() {
+                    c.args(["-vf", f]);
+                }
+                c.args(encoder.codec_args(quality, false));
+                c.args(["-movflags", "+faststart"]).arg(&part);
+            },
+        )?
     };
 
     let mut out = vec![0u8; comp.frame_bytes()];
@@ -160,14 +199,25 @@ pub fn export(
 
         while next_ripple < tracks.ripples.len() && tracks.ripples[next_ripple].out_ms <= out_ms {
             let r = &tracks.ripples[next_ripple];
-            active.push(RippleState { age_ms: r.out_ms, x: r.x, y: r.y }); // age filled in below
+            active.push(RippleState {
+                age_ms: r.out_ms,
+                x: r.x,
+                y: r.y,
+            }); // age filled in below
             next_ripple += 1;
         }
         active.retain(|r| out_ms - r.age_ms < RIPPLE_MS);
-        let ripples: Vec<RippleState> =
-            active.iter().map(|r| RippleState { age_ms: out_ms - r.age_ms, ..*r }).collect();
+        let ripples: Vec<RippleState> = active
+            .iter()
+            .map(|r| RippleState {
+                age_ms: out_ms - r.age_ms,
+                ..*r
+            })
+            .collect();
 
-        let index = ((src_ms - seek_ms) * src_fps / 1000.0 + 1e-6).floor().max(0.0) as u64;
+        let index = ((src_ms - seek_ms) * src_fps / 1000.0 + 1e-6)
+            .floor()
+            .max(0.0) as u64;
         let cam_frame = match &mut webcam {
             Some((reader, offset)) if src_ms >= *offset => {
                 Some(reader.frame_at(((src_ms - *offset) * src_fps / 1000.0).floor() as u64)?)
@@ -181,20 +231,34 @@ pub fn export(
             &FrameInput {
                 src,
                 cam: tracks.cam_at(i),
-                cursor: tracks.draw_cursor.then_some(CursorState { x, y, alpha, press }),
+                cursor: tracks
+                    .draw_cursor
+                    .then_some(CursorState { x, y, alpha, press }),
                 ripples: &ripples,
                 webcam: cam_frame,
             },
         );
         writer.write(&out)?;
-        progress(Progress { stage: "render", frame: i + 1, total: tracks.frames });
+        progress(Progress {
+            stage: "render",
+            frame: i + 1,
+            total: tracks.frames,
+        });
     }
     drop(video);
     drop(webcam);
     writer.finish()?;
 
     if gif {
-        encode_gif(opts.ffmpeg, &intermediate, tmp.path(), &part, &project.export.quality, progress, tracks.frames)?;
+        encode_gif(
+            opts.ffmpeg,
+            &intermediate,
+            tmp.path(),
+            &part,
+            &project.export.quality,
+            progress,
+            tracks.frames,
+        )?;
     }
     if cancel.load(Ordering::Relaxed) {
         let _ = std::fs::remove_file(&part);
@@ -221,18 +285,45 @@ fn encode_gif(
         "medium" => (192, "bayer:bayer_scale=5"),
         _ => (256, "sierra2_4a"),
     };
-    progress(Progress { stage: "palette", frame: 0, total });
+    progress(Progress {
+        stage: "palette",
+        frame: 0,
+        total,
+    });
     let mut c = ffmpeg::command(ffmpeg);
     c.args(["-v", "error", "-y", "-i"]).arg(frames);
-    c.args(["-vf", &format!("palettegen=max_colors={colors}:stats_mode=diff"), "-update", "1"]).arg(&palette);
+    c.args([
+        "-vf",
+        &format!("palettegen=max_colors={colors}:stats_mode=diff"),
+        "-update",
+        "1",
+    ])
+    .arg(&palette);
     ffmpeg::run(c, "gif palette")?;
 
-    progress(Progress { stage: "encode", frame: 0, total });
+    progress(Progress {
+        stage: "encode",
+        frame: 0,
+        total,
+    });
     let mut c = ffmpeg::command(ffmpeg);
-    c.args(["-v", "error", "-y", "-i"]).arg(frames).arg("-i").arg(&palette);
-    c.args(["-lavfi", &format!("paletteuse=dither={dither}:diff_mode=rectangle"), "-f", "gif"]).arg(out);
+    c.args(["-v", "error", "-y", "-i"])
+        .arg(frames)
+        .arg("-i")
+        .arg(&palette);
+    c.args([
+        "-lavfi",
+        &format!("paletteuse=dither={dither}:diff_mode=rectangle"),
+        "-f",
+        "gif",
+    ])
+    .arg(out);
     ffmpeg::run(c, "gif encode")?;
-    progress(Progress { stage: "encode", frame: total, total });
+    progress(Progress {
+        stage: "encode",
+        frame: total,
+        total,
+    });
     Ok(())
 }
 
@@ -243,18 +334,28 @@ mod tests {
 
     #[test]
     fn audio_filter_aligns_and_cuts() {
-        let kept = Kept::new(10_000.0, &[Cut { start_ms: 2000.0, end_ms: 4000.0 }]);
+        let kept = Kept::new(
+            10_000.0,
+            &[Cut {
+                start_ms: 2000.0,
+                end_ms: 4000.0,
+            }],
+        );
         assert_eq!(
             audio_filter(0.0, &kept),
             "aselect='between(t,0.0000,2.0000)+between(t,4.0000,10.0000)',asetpts=N/SR/TB,apad"
         );
         assert!(audio_filter(120.0, &kept).starts_with("adelay=120:all=1,aselect"));
-        assert!(audio_filter(-35.0, &kept).starts_with("atrim=start=0.0350,asetpts=PTS-STARTPTS,aselect"));
+        assert!(audio_filter(-35.0, &kept)
+            .starts_with("atrim=start=0.0350,asetpts=PTS-STARTPTS,aselect"));
     }
 
     #[test]
     fn partial_file_keeps_extension() {
-        assert_eq!(part_path(Path::new("/a/b/demo.mp4")), Path::new("/a/b/demo.part.mp4"));
+        assert_eq!(
+            part_path(Path::new("/a/b/demo.mp4")),
+            Path::new("/a/b/demo.part.mp4")
+        );
         assert_eq!(part_path(Path::new("x.gif")), Path::new("x.part.gif"));
     }
 }

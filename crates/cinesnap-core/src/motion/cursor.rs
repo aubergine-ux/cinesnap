@@ -75,7 +75,12 @@ pub fn smooth_zero_phase(v: &mut [f64], tau_ms: f64) {
 ///
 /// `smoothing` is 0 (raw) to 1 (very smooth). `hide_when_idle_ms` fades the
 /// cursor out after that long without movement (0 disables it).
-pub fn cursor_path(log: &EventLog, duration_ms: f64, smoothing: f64, hide_when_idle_ms: f64) -> CursorPath {
+pub fn cursor_path(
+    log: &EventLog,
+    duration_ms: f64,
+    smoothing: f64,
+    hide_when_idle_ms: f64,
+) -> CursorPath {
     let n = grid_len(duration_ms);
     let raw: Vec<(f64, f64, f64)> = log
         .events
@@ -94,7 +99,10 @@ pub fn cursor_path(log: &EventLog, duration_ms: f64, smoothing: f64, hide_when_i
             k += 1;
         }
         let (px, py) = match raw.get(k) {
-            None => (log.header.width as f64 / 2.0, log.header.height as f64 / 2.0),
+            None => (
+                log.header.width as f64 / 2.0,
+                log.header.height as f64 / 2.0,
+            ),
             Some(&(t0, x0, y0)) => match raw.get(k + 1) {
                 Some(&(t1, x1, y1)) if t >= t0 && t1 > t0 => {
                     let a = (t - t0) / (t1 - t0);
@@ -144,7 +152,13 @@ pub fn cursor_path(log: &EventLog, duration_ms: f64, smoothing: f64, hide_when_i
         let hi = (((u + 3.0 * PIN_MS) / STEP_MS).ceil() as usize).min(n.saturating_sub(1));
         for i in lo..=hi.max(lo).min(n.saturating_sub(1)) {
             let t = i as f64 * STEP_MS;
-            let dist = if t < d { d - t } else if t > u { t - u } else { 0.0 };
+            let dist = if t < d {
+                d - t
+            } else if t > u {
+                t - u
+            } else {
+                0.0
+            };
             let w = (-(dist / PIN_MS).powi(2)).exp();
             x[i] += (raw_x[i] - x[i]) * w;
             y[i] += (raw_y[i] - y[i]) * w;
@@ -196,10 +210,16 @@ mod tests {
     use crate::events::{Button, Event, Header};
 
     fn log(events: Vec<Event>) -> EventLog {
-        EventLog { header: Header::new(1000, 1000, "exact", "metadata"), events }
+        EventLog {
+            header: Header::new(1000, 1000, "exact", "metadata"),
+            events,
+        }
     }
     fn mv(t: f64, x: f64, y: f64) -> Event {
-        Event { t, kind: EventKind::Move { x, y } }
+        Event {
+            t,
+            kind: EventKind::Move { x, y },
+        }
     }
 
     #[test]
@@ -217,7 +237,12 @@ mod tests {
         let rough = |p: &CursorPath| -> f64 {
             p.y.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f64>() / p.len() as f64
         };
-        assert!(rough(&smooth) < rough(&raw) * 0.2, "{} vs {}", rough(&smooth), rough(&raw));
+        assert!(
+            rough(&smooth) < rough(&raw) * 0.2,
+            "{} vs {}",
+            rough(&smooth),
+            rough(&raw)
+        );
         // No lag: mid-way along the line the smoothed x matches the true x.
         let (x, y, ..) = smooth.sample(1200.0);
         assert!((x - 300.0).abs() < 3.0, "x = {x}");
@@ -227,12 +252,30 @@ mod tests {
     #[test]
     fn cursor_is_exact_at_click() {
         let mut events = vec![mv(0.0, 0.0, 0.0), mv(400.0, 800.0, 600.0)];
-        events.push(Event { t: 500.0, kind: EventKind::Down { b: Button::Left, x: 800.0, y: 600.0, inferred: false } });
-        events.push(Event { t: 580.0, kind: EventKind::Up { b: Button::Left, x: 800.0, y: 600.0 } });
+        events.push(Event {
+            t: 500.0,
+            kind: EventKind::Down {
+                b: Button::Left,
+                x: 800.0,
+                y: 600.0,
+                inferred: false,
+            },
+        });
+        events.push(Event {
+            t: 580.0,
+            kind: EventKind::Up {
+                b: Button::Left,
+                x: 800.0,
+                y: 600.0,
+            },
+        });
         events.push(mv(700.0, 100.0, 100.0));
         let p = cursor_path(&log(events), 1500.0, 1.0, 0.0);
         let (x, y, _, press) = p.sample(540.0);
-        assert!((x - 800.0).abs() < 1.0 && (y - 600.0).abs() < 1.0, "({x}, {y})");
+        assert!(
+            (x - 800.0).abs() < 1.0 && (y - 600.0).abs() < 1.0,
+            "({x}, {y})"
+        );
         assert!(press > 0.99);
         assert_eq!(p.sample(1400.0).3, 0.0);
     }
@@ -242,7 +285,10 @@ mod tests {
         let events = vec![
             mv(0.0, 10.0, 10.0),
             mv(100.0, 50.0, 50.0),
-            Event { t: 3000.0, kind: EventKind::Visible { v: false } },
+            Event {
+                t: 3000.0,
+                kind: EventKind::Visible { v: false },
+            },
         ];
         let l = log(events);
         let p = cursor_path(&l, 4000.0, 0.5, 1000.0);

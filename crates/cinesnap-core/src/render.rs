@@ -8,16 +8,23 @@ use std::path::Path;
 
 use rayon::prelude::*;
 use tiny_skia::{
-    Color, FillRule, GradientStop, LineJoin, LinearGradient, Mask, Paint, Path as SkPath, PathBuilder,
-    Pixmap, PixmapMut, Point, Shader, SpreadMode, Stroke, Transform,
+    Color, FillRule, GradientStop, LineJoin, LinearGradient, Mask, Paint, Path as SkPath,
+    PathBuilder, Pixmap, PixmapMut, Point, Shader, SpreadMode, Stroke, Transform,
 };
 
 use crate::layout::{view_rect, Layout};
 use crate::project::{parse_color, Background, Project, Rect};
 
 /// Arrow cursor outline in unit coordinates (height = 1, tip at the origin).
-pub const ARROW: [(f32, f32); 7] =
-    [(0.0, 0.0), (0.0, 0.80), (0.19, 0.63), (0.33, 0.95), (0.45, 0.90), (0.31, 0.59), (0.57, 0.59)];
+pub const ARROW: [(f32, f32); 7] = [
+    (0.0, 0.0),
+    (0.0, 0.80),
+    (0.19, 0.63),
+    (0.33, 0.95),
+    (0.45, 0.90),
+    (0.31, 0.59),
+    (0.57, 0.59),
+];
 
 pub const RIPPLE_MS: f64 = 500.0;
 
@@ -72,7 +79,9 @@ pub struct Compositor {
 pub fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<SkPath> {
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
     if r < 0.01 {
-        return Some(PathBuilder::from_rect(tiny_skia::Rect::from_xywh(x, y, w, h)?));
+        return Some(PathBuilder::from_rect(tiny_skia::Rect::from_xywh(
+            x, y, w, h,
+        )?));
     }
     let k = r * 0.447_715_25; // r * (1 - kappa)
     let mut p = PathBuilder::new();
@@ -95,7 +104,12 @@ fn color(c: [u8; 4]) -> Color {
 
 fn solid(c: [u8; 4], alpha: f64) -> Paint<'static> {
     let mut p = Paint::default();
-    p.set_color(Color::from_rgba8(c[0], c[1], c[2], (c[3] as f64 * alpha.clamp(0.0, 1.0)).round() as u8));
+    p.set_color(Color::from_rgba8(
+        c[0],
+        c[1],
+        c[2],
+        (c[3] as f64 * alpha.clamp(0.0, 1.0)).round() as u8,
+    ));
     p.anti_alias = true;
     p
 }
@@ -104,18 +118,21 @@ fn solid(c: [u8; 4], alpha: f64) -> Paint<'static> {
 fn blur_alpha(buf: &mut [u8], w: usize, h: usize, sigma: f64) {
     let r = ((sigma * 3.0f64.sqrt() / 1.5).round() as usize).max(1);
     let mut tmp = vec![0u8; buf.len()];
-    let pass = |src: &[u8], dst: &mut [u8], len: usize, lines: usize, stride: usize, step: usize| {
-        let win = (2 * r + 1) as u32;
-        for l in 0..lines {
-            let at = |i: isize| src[l * stride + (i.clamp(0, len as isize - 1) as usize) * step] as u32;
-            let mut sum: u32 = (-(r as isize)..=r as isize).map(at).sum();
-            for i in 0..len {
-                dst[l * stride + i * step] = (sum / win) as u8;
-                sum += at(i as isize + r as isize + 1);
-                sum -= at(i as isize - r as isize);
+    let pass =
+        |src: &[u8], dst: &mut [u8], len: usize, lines: usize, stride: usize, step: usize| {
+            let win = (2 * r + 1) as u32;
+            for l in 0..lines {
+                let at = |i: isize| {
+                    src[l * stride + (i.clamp(0, len as isize - 1) as usize) * step] as u32
+                };
+                let mut sum: u32 = (-(r as isize)..=r as isize).map(at).sum();
+                for i in 0..len {
+                    dst[l * stride + i * step] = (sum / win) as u8;
+                    sum += at(i as isize + r as isize + 1);
+                    sum -= at(i as isize - r as isize);
+                }
             }
-        }
-    };
+        };
     for _ in 0..3 {
         pass(buf, &mut tmp, w, h, w, 1); // horizontal
         pass(&tmp, buf, h, w, 1, w); // vertical
@@ -125,14 +142,26 @@ fn blur_alpha(buf: &mut [u8], w: usize, h: usize, sigma: f64) {
 fn load_cover(path: &Path, w: u32, h: u32, blur_sigma: f64) -> Option<Vec<u8>> {
     let img = image::open(path).ok()?;
     if blur_sigma < 0.5 {
-        return Some(img.resize_to_fill(w, h, image::imageops::FilterType::Triangle).to_rgba8().into_raw());
+        return Some(
+            img.resize_to_fill(w, h, image::imageops::FilterType::Triangle)
+                .to_rgba8()
+                .into_raw(),
+        );
     }
     // Blur at reduced resolution: far cheaper, visually identical.
     let f = (blur_sigma / 2.5).clamp(1.0, 16.0);
-    let (sw, sh) = (((w as f64 / f) as u32).max(2), ((h as f64 / f) as u32).max(2));
+    let (sw, sh) = (
+        ((w as f64 / f) as u32).max(2),
+        ((h as f64 / f) as u32).max(2),
+    );
     let small = img.resize_to_fill(sw, sh, image::imageops::FilterType::Triangle);
     let blurred = small.blur((blur_sigma / f) as f32);
-    Some(blurred.resize_exact(w, h, image::imageops::FilterType::CatmullRom).to_rgba8().into_raw())
+    Some(
+        blurred
+            .resize_exact(w, h, image::imageops::FilterType::CatmullRom)
+            .to_rgba8()
+            .into_raw(),
+    )
 }
 
 fn draw_background(project: &Project, layout: &Layout, assets: &Path) -> Pixmap {
@@ -154,18 +183,26 @@ fn draw_background(project: &Project, layout: &Layout, assets: &Path) -> Pixmap 
                 GradientStop::new(0.0, color(parse_color(from))),
                 GradientStop::new(1.0, color(parse_color(to))),
             ];
-            paint.shader = LinearGradient::new(p0, p1, stops, SpreadMode::Pad, Transform::identity())
-                .unwrap_or(Shader::SolidColor(color(parse_color(from))));
+            paint.shader =
+                LinearGradient::new(p0, p1, stops, SpreadMode::Pad, Transform::identity())
+                    .unwrap_or(Shader::SolidColor(color(parse_color(from))));
         }
         Background::Image { path } | Background::Wallpaper { path, .. } => {
             let sigma = match &project.frame.background {
                 Background::Wallpaper { blur, .. } => blur * layout.s,
                 _ => 0.0,
             };
-            let file = if Path::new(path).is_absolute() { path.into() } else { assets.join(path) };
+            let file = if Path::new(path).is_absolute() {
+                path.into()
+            } else {
+                assets.join(path)
+            };
             match load_cover(&file, w, h, sigma) {
                 Some(mut px) => {
-                    px.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p[3] = 255);
+                    px.as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .for_each(|p| p[3] = 255);
                     pm.data_mut().copy_from_slice(&px);
                     return pm;
                 }
@@ -181,7 +218,13 @@ impl Compositor {
     /// `src_w × src_h` is the size of the (already cropped) frames that will
     /// be passed to [`render`](Self::render). `assets` is the directory that
     /// relative background image paths resolve against.
-    pub fn new(project: &Project, layout: Layout, src_w: usize, src_h: usize, assets: &Path) -> Self {
+    pub fn new(
+        project: &Project,
+        layout: Layout,
+        src_w: usize,
+        src_h: usize,
+        assets: &Path,
+    ) -> Self {
         let (w, h) = (layout.width as usize, layout.height as usize);
         let f = layout.frame;
         let mut base = draw_background(project, &layout, assets);
@@ -190,9 +233,13 @@ impl Compositor {
         if project.frame.shadow > 0.0 {
             let mut m = Mask::new(layout.width, layout.height).unwrap();
             let off = 16.0 * layout.s;
-            if let Some(path) =
-                rounded_rect(f.x as f32, (f.y + off) as f32, f.width as f32, f.height as f32, layout.radius as f32)
-            {
+            if let Some(path) = rounded_rect(
+                f.x as f32,
+                (f.y + off) as f32,
+                f.width as f32,
+                f.height as f32,
+                layout.radius as f32,
+            ) {
                 m.fill_path(&path, FillRule::Winding, true, Transform::identity());
             }
             let mut a = m.data().to_vec();
@@ -207,9 +254,13 @@ impl Compositor {
         }
 
         let mut frame_mask = Mask::new(layout.width, layout.height).unwrap();
-        if let Some(path) =
-            rounded_rect(f.x as f32, f.y as f32, f.width as f32, f.height as f32, layout.radius as f32)
-        {
+        if let Some(path) = rounded_rect(
+            f.x as f32,
+            f.y as f32,
+            f.width as f32,
+            f.height as f32,
+            layout.radius as f32,
+        ) {
             frame_mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
         }
 
@@ -217,14 +268,31 @@ impl Compositor {
         let webcam = (project.source.webcam.is_some() && project.webcam.show).then(|| {
             let side = ((project.webcam.size * short).round() as usize).clamp(2, short as usize);
             let margin = (0.03 * short).round() as usize;
-            let x = if project.webcam.corner.ends_with("left") { margin } else { w.saturating_sub(side + margin) };
-            let y = if project.webcam.corner.starts_with("top") { margin } else { h.saturating_sub(side + margin) };
+            let x = if project.webcam.corner.ends_with("left") {
+                margin
+            } else {
+                w.saturating_sub(side + margin)
+            };
+            let y = if project.webcam.corner.starts_with("top") {
+                margin
+            } else {
+                h.saturating_sub(side + margin)
+            };
             let mut m = Mask::new(side as u32, side as u32).unwrap();
-            let r = if project.webcam.shape == "circle" { side as f32 / 2.0 } else { side as f32 * 0.18 };
+            let r = if project.webcam.shape == "circle" {
+                side as f32 / 2.0
+            } else {
+                side as f32 * 0.18
+            };
             if let Some(path) = rounded_rect(0.0, 0.0, side as f32, side as f32, r) {
                 m.fill_path(&path, FillRule::Winding, true, Transform::identity());
             }
-            WebcamSlot { x, y, side, mask: m.data().to_vec() }
+            WebcamSlot {
+                x,
+                y,
+                side,
+                mask: m.data().to_vec(),
+            }
         });
 
         Self {
@@ -258,7 +326,10 @@ impl Compositor {
     pub fn map(&self, cam: (f64, f64, f64), x: f64, y: f64) -> (f64, f64) {
         let v = view_rect(self.crop, cam.0, cam.1, cam.2);
         let f = self.layout.frame;
-        (f.x + (x - v.x) / v.width * f.width, f.y + (y - v.y) / v.height * f.height)
+        (
+            f.x + (x - v.x) / v.width * f.width,
+            f.y + (y - v.y) / v.height * f.height,
+        )
     }
 
     pub fn render(&self, out: &mut [u8], input: &FrameInput) {
@@ -280,7 +351,10 @@ impl Compositor {
                 let (x, y) = self.map(input.cam, r.x, r.y);
                 let radius = (8.0 + 36.0 * (1.0 - (1.0 - p).powi(3))) * s;
                 if let Some(path) = PathBuilder::from_circle(x as f32, y as f32, radius as f32) {
-                    let stroke = Stroke { width: (3.0 * self.layout.s) as f32, ..Default::default() };
+                    let stroke = Stroke {
+                        width: (3.0 * self.layout.s) as f32,
+                        ..Default::default()
+                    };
                     let paint = solid(self.ripple_color, 0.55 * (1.0 - p));
                     pm.stroke_path(&path, &paint, &stroke, Transform::identity(), clip);
                 }
@@ -302,10 +376,32 @@ impl Compositor {
             pb.close();
             if let Some(path) = pb.finish() {
                 let shadow = Transform::from_translate(0.0, 0.07 * h);
-                pm.fill_path(&path, &solid([0, 0, 0, 255], 0.28 * c.alpha), FillRule::Winding, shadow, clip);
-                pm.fill_path(&path, &solid([0, 0, 0, 255], c.alpha), FillRule::Winding, Transform::identity(), clip);
-                let stroke = Stroke { width: 0.07 * h, line_join: LineJoin::Round, ..Default::default() };
-                pm.stroke_path(&path, &solid([255, 255, 255, 255], c.alpha), &stroke, Transform::identity(), clip);
+                pm.fill_path(
+                    &path,
+                    &solid([0, 0, 0, 255], 0.28 * c.alpha),
+                    FillRule::Winding,
+                    shadow,
+                    clip,
+                );
+                pm.fill_path(
+                    &path,
+                    &solid([0, 0, 0, 255], c.alpha),
+                    FillRule::Winding,
+                    Transform::identity(),
+                    clip,
+                );
+                let stroke = Stroke {
+                    width: 0.07 * h,
+                    line_join: LineJoin::Round,
+                    ..Default::default()
+                };
+                pm.stroke_path(
+                    &path,
+                    &solid([255, 255, 255, 255], c.alpha),
+                    &stroke,
+                    Transform::identity(),
+                    clip,
+                );
             }
         }
 
@@ -317,7 +413,13 @@ impl Compositor {
                     let dst = &mut out[o..o + slot.side * 4];
                     let src = &cam[row * slot.side * 4..(row + 1) * slot.side * 4];
                     let m = &slot.mask[row * slot.side..(row + 1) * slot.side];
-                    for ((d, s), &m) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.chunks_exact(4)).zip(m) {
+                    for ((d, s), &m) in dst
+                        .as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .zip(src.as_chunks::<4>().0)
+                        .zip(m)
+                    {
                         blend(d, s, m as u32);
                     }
                 }
@@ -346,50 +448,61 @@ impl Compositor {
         let taps: usize = if step_x.max(step_y) > 1.4 { 2 } else { 1 };
 
         // Per-axis lookup: (index0, index1, weight 0..256) for each tap.
-        let table = |o0: usize, o1: usize, origin: f64, view0: f64, step: f64, k: f64, limit: usize| {
-            let mut t = Vec::with_capacity((o1 - o0) * taps);
-            for o in o0..o1 {
-                for tap in 0..taps {
-                    let sub = (tap as f64 + 0.5) / taps as f64;
-                    let pos = (view0 * k + (o as f64 + sub - origin) * step - 0.5).clamp(0.0, (limit - 1) as f64);
-                    let i = pos.floor() as usize;
-                    t.push((i, (i + 1).min(limit - 1), ((pos - i as f64) * 256.0) as u32));
+        let table =
+            |o0: usize, o1: usize, origin: f64, view0: f64, step: f64, k: f64, limit: usize| {
+                let mut t = Vec::with_capacity((o1 - o0) * taps);
+                for o in o0..o1 {
+                    for tap in 0..taps {
+                        let sub = (tap as f64 + 0.5) / taps as f64;
+                        let pos = (view0 * k + (o as f64 + sub - origin) * step - 0.5)
+                            .clamp(0.0, (limit - 1) as f64);
+                        let i = pos.floor() as usize;
+                        t.push((i, (i + 1).min(limit - 1), ((pos - i as f64) * 256.0) as u32));
+                    }
                 }
-            }
-            t
-        };
+                t
+            };
         let cols = table(x0, x1, f.x, v.x - self.crop.x, step_x, kx, self.src_w);
         let rows = table(y0, y1, f.y, v.y - self.crop.y, step_y, ky, self.src_h);
         let mask = self.frame_mask.data();
         let sw = self.src_w;
         let shift = if taps == 2 { 18 } else { 16 };
 
-        out.par_chunks_exact_mut(w * 4).enumerate().skip(y0).take(y1 - y0).for_each(|(y, line)| {
-            let mrow = &mask[y * w..(y + 1) * w];
-            let rtaps = &rows[(y - y0) * taps..(y - y0 + 1) * taps];
-            for x in x0..x1 {
-                let m = mrow[x] as u32;
-                if m == 0 {
-                    continue;
-                }
-                let mut acc = [0u32; 3];
-                for &(r0, r1, wy) in rtaps {
-                    for &(c0, c1, wx) in &cols[(x - x0) * taps..(x - x0 + 1) * taps] {
-                        let p00 = &src[(r0 * sw + c0) * 4..];
-                        let p01 = &src[(r0 * sw + c1) * 4..];
-                        let p10 = &src[(r1 * sw + c0) * 4..];
-                        let p11 = &src[(r1 * sw + c1) * 4..];
-                        for ch in 0..3 {
-                            let top = p00[ch] as u32 * (256 - wx) + p01[ch] as u32 * wx;
-                            let bot = p10[ch] as u32 * (256 - wx) + p11[ch] as u32 * wx;
-                            acc[ch] += top * (256 - wy) + bot * wy;
+        out.par_chunks_exact_mut(w * 4)
+            .enumerate()
+            .skip(y0)
+            .take(y1 - y0)
+            .for_each(|(y, line)| {
+                let mrow = &mask[y * w..(y + 1) * w];
+                let rtaps = &rows[(y - y0) * taps..(y - y0 + 1) * taps];
+                for x in x0..x1 {
+                    let m = mrow[x] as u32;
+                    if m == 0 {
+                        continue;
+                    }
+                    let mut acc = [0u32; 3];
+                    for &(r0, r1, wy) in rtaps {
+                        for &(c0, c1, wx) in &cols[(x - x0) * taps..(x - x0 + 1) * taps] {
+                            let p00 = &src[(r0 * sw + c0) * 4..];
+                            let p01 = &src[(r0 * sw + c1) * 4..];
+                            let p10 = &src[(r1 * sw + c0) * 4..];
+                            let p11 = &src[(r1 * sw + c1) * 4..];
+                            for ch in 0..3 {
+                                let top = p00[ch] as u32 * (256 - wx) + p01[ch] as u32 * wx;
+                                let bot = p10[ch] as u32 * (256 - wx) + p11[ch] as u32 * wx;
+                                acc[ch] += top * (256 - wy) + bot * wy;
+                            }
                         }
                     }
+                    let px = [
+                        (acc[0] >> shift) as u8,
+                        (acc[1] >> shift) as u8,
+                        (acc[2] >> shift) as u8,
+                        255,
+                    ];
+                    blend(&mut line[x * 4..x * 4 + 4], &px, m);
                 }
-                let px = [(acc[0] >> shift) as u8, (acc[1] >> shift) as u8, (acc[2] >> shift) as u8, 255];
-                blend(&mut line[x * 4..x * 4 + 4], &px, m);
-            }
-        });
+            });
     }
 }
 
@@ -420,7 +533,11 @@ mod tests {
         let mut v = Vec::new();
         for _y in 0..100 {
             for x in 0..200 {
-                v.extend(if x < 100 { [255, 0, 0, 255] } else { [0, 0, 255, 255] });
+                v.extend(if x < 100 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                });
             }
         }
         v
@@ -428,7 +545,9 @@ mod tests {
 
     fn setup(mutate: impl FnOnce(&mut Project)) -> (Compositor, Vec<u8>) {
         let mut p = project(200, 100, 1000.0);
-        p.frame.background = Background::Solid { color: "#00ff00".into() };
+        p.frame.background = Background::Solid {
+            color: "#00ff00".into(),
+        };
         p.frame.shadow = 0.0;
         p.frame.aspect = "source".into();
         p.export.preset = "720p".into();
@@ -439,7 +558,13 @@ mod tests {
     }
 
     fn input<'a>(src: &'a [u8], cam: (f64, f64, f64)) -> FrameInput<'a> {
-        FrameInput { src, cam, cursor: None, ripples: &[], webcam: None }
+        FrameInput {
+            src,
+            cam,
+            cursor: None,
+            ripples: &[],
+            webcam: None,
+        }
     }
 
     #[test]
@@ -449,7 +574,11 @@ mod tests {
         c.render(&mut out, &input(&src, (100.0, 50.0, 1.0)));
         let l = *c.layout();
         assert_eq!((l.width, l.height), (1440, 720));
-        assert_eq!(px(&out, l.width, 5, 5), [0, 255, 0], "padding shows background");
+        assert_eq!(
+            px(&out, l.width, 5, 5),
+            [0, 255, 0],
+            "padding shows background"
+        );
         assert_eq!(px(&out, l.width, 400, 360), [255, 0, 0]);
         assert_eq!(px(&out, l.width, 1000, 360), [0, 0, 255]);
         // The very corner of the frame is rounded away.
@@ -465,7 +594,11 @@ mod tests {
         // 2× centred on the blue half: everything in the frame is blue.
         c.render(&mut out, &input(&src, (150.0, 50.0, 2.0)));
         let l = *c.layout();
-        for x in [l.frame.x as u32 + 30, 720, (l.frame.x + l.frame.width) as u32 - 30] {
+        for x in [
+            l.frame.x as u32 + 30,
+            720,
+            (l.frame.x + l.frame.width) as u32 - 30,
+        ] {
             assert_eq!(px(&out, l.width, x, 360), [0, 0, 255], "x = {x}");
         }
         // Mapping: the source centre sits at the left edge of the frame.
@@ -475,10 +608,23 @@ mod tests {
 
     #[test]
     fn crop_restricts_the_source() {
-        let (c, mut out) = setup(|p| p.crop = Rect { x: 100.0, y: 0.0, width: 100.0, height: 100.0 });
+        let (c, mut out) = setup(|p| {
+            p.crop = Rect {
+                x: 100.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            }
+        });
         // Frames handed to the compositor are already cropped.
-        let src: Vec<u8> = std::iter::repeat_n([0u8, 0, 255, 255], 100 * 100).flatten().collect();
-        let c2 = Compositor { src_w: 100, src_h: 100, ..c };
+        let src: Vec<u8> = std::iter::repeat_n([0u8, 0, 255, 255], 100 * 100)
+            .flatten()
+            .collect();
+        let c2 = Compositor {
+            src_w: 100,
+            src_h: 100,
+            ..c
+        };
         out.resize(c2.frame_bytes(), 0);
         c2.render(&mut out, &input(&src, (150.0, 50.0, 1.0)));
         let l = *c2.layout();
@@ -498,13 +644,35 @@ mod tests {
         let below = px(&out, l.width, 720, (l.frame.y + l.frame.height) as u32 + 6);
         assert!(below[1] < 235, "{below:?}");
 
-        let cursor = CursorState { x: 50.0, y: 50.0, alpha: 1.0, press: 0.0 };
-        let ripples = [RippleState { age_ms: 250.0, x: 150.0, y: 50.0 }];
-        c.render(&mut out, &FrameInput { src: &src, cam, cursor: Some(cursor), ripples: &ripples, webcam: None });
+        let cursor = CursorState {
+            x: 50.0,
+            y: 50.0,
+            alpha: 1.0,
+            press: 0.0,
+        };
+        let ripples = [RippleState {
+            age_ms: 250.0,
+            x: 150.0,
+            y: 50.0,
+        }];
+        c.render(
+            &mut out,
+            &FrameInput {
+                src: &src,
+                cam,
+                cursor: Some(cursor),
+                ripples: &ripples,
+                webcam: None,
+            },
+        );
         let (cx, cy) = c.map(cam, 50.0, 50.0);
         // Inside the arrow body: black. On red elsewhere.
         assert_eq!(px(&out, l.width, cx as u32 + 4, cy as u32 + 14), [0, 0, 0]);
-        let changed = out.chunks(4).zip(plain.chunks(4)).filter(|(a, b)| a != b).count();
+        let changed = out
+            .chunks(4)
+            .zip(plain.chunks(4))
+            .filter(|(a, b)| a != b)
+            .count();
         assert!(changed > 300, "cursor and ripple touched {changed} px");
         // The ripple ring lightens blue pixels at its radius.
         let (rx, ry) = c.map(cam, 150.0, 50.0);
@@ -517,24 +685,49 @@ mod tests {
     fn webcam_overlay_is_masked_to_a_circle() {
         let (c, mut out) = setup(|p| {
             p.source.webcam = Some(crate::project::WebcamTrack {
-                file: "webcam.mp4".into(), offset_ms: 0.0, width: 640, height: 480,
+                file: "webcam.mp4".into(),
+                offset_ms: 0.0,
+                width: 640,
+                height: 480,
             });
         });
         let src = source();
         let side = c.webcam_side().unwrap();
-        let cam_px: Vec<u8> = std::iter::repeat_n([255u8, 255, 0, 255], side * side).flatten().collect();
-        c.render(&mut out, &FrameInput { webcam: Some(&cam_px), ..input(&src, (100.0, 50.0, 1.0)) });
+        let cam_px: Vec<u8> = std::iter::repeat_n([255u8, 255, 0, 255], side * side)
+            .flatten()
+            .collect();
+        c.render(
+            &mut out,
+            &FrameInput {
+                webcam: Some(&cam_px),
+                ..input(&src, (100.0, 50.0, 1.0))
+            },
+        );
         let l = *c.layout();
         let margin = (0.03 * 720.0f64).round() as u32;
-        let (x, y) = (l.width - margin - side as u32, l.height - margin - side as u32);
-        assert_eq!(px(&out, l.width, x + side as u32 / 2, y + side as u32 / 2), [255, 255, 0]);
-        assert_ne!(px(&out, l.width, x + 1, y + 1), [255, 255, 0], "corner is outside the circle");
+        let (x, y) = (
+            l.width - margin - side as u32,
+            l.height - margin - side as u32,
+        );
+        assert_eq!(
+            px(&out, l.width, x + side as u32 / 2, y + side as u32 / 2),
+            [255, 255, 0]
+        );
+        assert_ne!(
+            px(&out, l.width, x + 1, y + 1),
+            [255, 255, 0],
+            "corner is outside the circle"
+        );
     }
 
     #[test]
     fn gradient_runs_in_css_direction() {
         let (c, _) = setup(|p| {
-            p.frame.background = Background::Gradient { from: "#000000".into(), to: "#ffffff".into(), angle: 90.0 };
+            p.frame.background = Background::Gradient {
+                from: "#000000".into(),
+                to: "#ffffff".into(),
+                angle: 90.0,
+            };
         });
         let l = *c.layout();
         let left = px(&c.base, l.width, 2, 360)[0];
