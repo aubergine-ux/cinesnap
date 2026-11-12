@@ -392,8 +392,51 @@ fn headless_record(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `cinesnap doctor`: print what this machine and session support.
+fn doctor() {
+    let ffmpeg = ffmpeg::locate(None);
+    let (cursor, clicks, notes) = devices::input_capabilities();
+    println!("platform  {}", devices::platform());
+    match &ffmpeg {
+        Some(f) => {
+            println!(
+                "ffmpeg    {} ({})",
+                f.display(),
+                ffmpeg::version(f).unwrap_or_default()
+            );
+            println!("encoder   {}", Encoder::detect(f).name());
+        }
+        None => println!("ffmpeg    not found (the app can download it)"),
+    }
+    println!("cursor    {cursor}");
+    println!("clicks    {clicks}");
+    let sources = devices::sources(ffmpeg.as_deref());
+    if sources.portal {
+        println!("capture   screen or window, chosen in the system dialog");
+    }
+    for s in &sources.screens {
+        println!(
+            "screen    {} {}x{} at {},{}",
+            s.name, s.width, s.height, s.x, s.y
+        );
+    }
+    println!("windows   {}", sources.windows.len());
+    for d in &sources.mics {
+        println!("mic       {}", d.name);
+    }
+    for d in &sources.webcams {
+        println!("webcam    {}", d.name);
+    }
+    for n in notes {
+        println!("note      {n}");
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|a| a == "doctor") {
+        return doctor();
+    }
     if args.get(1).is_some_and(|a| a == "record") {
         if let Err(e) = headless_record(&args[2..]) {
             eprintln!("error: {e:#}");
