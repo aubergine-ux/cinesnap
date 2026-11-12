@@ -42,16 +42,48 @@ Cinesnap records the screen **and** a log of where the cursor was and when you c
 
 ## Features
 
-| | | |
-| :-- | :-- | :-- |
-| 🔍 | **Auto-zoom** | Eases in on every click and typing burst and back out again. Clicks close together share one zoom that follows the cursor. |
-| 🖱️ | **Cursor polish** | The system cursor is left out of the recording. A larger, smoothed one is drawn from the log, with click ripples, and still lands exactly on target. |
-| 🎞️ | **Timeline editor** | Zooms are blocks you drag, resize, add and delete. Trim the ends, cut out mistakes, tune zoom level and easing per segment. Full undo. |
-| 🖼️ | **Framing** | Padding, rounded corners and a soft shadow over a gradient, colour, image or blurred wallpaper. 16:9, 9:16 for shorts, 1:1, 4:3. |
-| ✂️ | **Crop** | Record a screen, a window or a region, or pick the region afterwards. Nothing is thrown away, so the crop can always be changed. |
-| 🎙️ | **Mic and webcam** | Optional microphone track and a webcam bubble in the corner, recorded separately so they can be toggled later. |
-| 📦 | **Export** | MP4 (H.264) with hardware encoding where the machine supports it, and small palette-optimised GIFs sized for READMEs. |
-| ⌨️ | **Command line** | Render a recording from a script, or check what a machine supports with `cinesnap doctor`. |
+<table>
+  <tr>
+    <td align="center" width="56">🔍</td>
+    <td width="170"><b>Auto-zoom</b></td>
+    <td>Eases in on every click and typing burst and back out again. Clicks close together share one zoom that follows the cursor.</td>
+  </tr>
+  <tr>
+    <td align="center" width="56">🖱️</td>
+    <td width="170"><b>Cursor polish</b></td>
+    <td>The system cursor is left out of the recording. A larger, smoothed one is drawn from the log, with click ripples, and still lands exactly on target.</td>
+  </tr>
+  <tr>
+    <td align="center" width="56">🎞️</td>
+    <td width="170"><b>Timeline editor</b></td>
+    <td>Zooms are blocks you drag, resize, add and delete. Trim the ends, cut out mistakes, tune zoom level and easing per segment. Full undo.</td>
+  </tr>
+  <tr>
+    <td align="center" width="56">🖼️</td>
+    <td width="170"><b>Framing</b></td>
+    <td>Padding, rounded corners and a soft shadow over a gradient, colour, image or blurred wallpaper. 16:9, 9:16 for shorts, 1:1, 4:3.</td>
+  </tr>
+  <tr>
+    <td align="center" width="56">✂️</td>
+    <td width="170"><b>Crop</b></td>
+    <td>Record a screen, a window or a region, or pick the region afterwards. Nothing is thrown away, so the crop can always be changed.</td>
+  </tr>
+  <tr>
+    <td align="center" width="56">🎙️</td>
+    <td width="170"><b>Mic and webcam</b></td>
+    <td>Optional microphone track and a webcam bubble in the corner, recorded separately so they can be toggled later.</td>
+  </tr>
+  <tr>
+    <td align="center" width="56">📦</td>
+    <td width="170"><b>Export</b></td>
+    <td>MP4 (H.264) with hardware encoding where the machine supports it, and small palette-optimised GIFs sized for READMEs.</td>
+  </tr>
+  <tr>
+    <td align="center" width="56">⌨️</td>
+    <td width="170"><b>Command line</b></td>
+    <td>Render a recording from a script, or check what a machine supports with <code>cinesnap doctor</code>.</td>
+  </tr>
+</table>
 
 <p align="center">
   <img src="docs/media/editor.png" alt="The Cinesnap editor: preview, timeline with zoom segments, settings panel" width="92%">
