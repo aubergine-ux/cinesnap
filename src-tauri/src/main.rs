@@ -159,10 +159,7 @@ fn start_recording(
             .format("Recording %Y-%m-%d %H.%M.%S.cinesnap")
             .to_string();
         let dir = recordings_dir(&app)?.join(name);
-        let recording = Recording::start(&ffmpeg, enc, &dir, &options).map_err(|e| {
-            let _ = std::fs::remove_dir_all(&dir);
-            err(e)
-        })?;
+        let recording = Recording::start(&ffmpeg, enc, &dir, &options).map_err(err)?;
         *state.recording.lock().unwrap() = Some(recording);
         Ok(())
     })();
@@ -329,7 +326,51 @@ fn webkit_workarounds() {
     }
 }
 
+/// `cinesnap record <dir> [--seconds N] [--fps N] [--mic ID] [--webcam ID]`:
+/// record without opening the window. Handy for scripts and for checking
+/// that capture works on a machine.
+fn headless_record(args: &[String]) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let mut dir = None;
+    let (mut seconds, mut fps, mut mic, mut webcam) = (5.0f64, 60u32, None, None);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let mut value = || it.next().with_context(|| format!("{arg} needs a value"));
+        match arg.as_str() {
+            "--seconds" => seconds = value()?.parse()?,
+            "--fps" => fps = value()?.parse()?,
+            "--mic" => mic = Some(value()?.clone()),
+            "--webcam" => webcam = Some(value()?.clone()),
+            other => dir = Some(PathBuf::from(other)),
+        }
+    }
+    let dir = dir.context("usage: cinesnap record <dir.cinesnap> [--seconds N] [--fps N] [--mic ID] [--webcam ID]")?;
+    let ffmpeg = ffmpeg::locate(None).context("ffmpeg not found")?;
+    let options = RecordOptions {
+        target: recorder::Target { kind: "screen".into(), id: None },
+        region: None,
+        mic,
+        webcam,
+        fps,
+    };
+    let recording = Recording::start(&ffmpeg, Encoder::detect(&ffmpeg), &dir, &options)?;
+    eprintln!("recording for {seconds} s…");
+    std::thread::sleep(Duration::from_secs_f64(seconds));
+    let dir = recording.stop(&ffmpeg)?;
+    println!("{}", dir.display());
+    Ok(())
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|a| a == "record") {
+        if let Err(e) = headless_record(&args[2..]) {
+            eprintln!("error: {e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     #[cfg(target_os = "linux")]
     webkit_workarounds();
 

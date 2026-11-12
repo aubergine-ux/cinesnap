@@ -31,7 +31,8 @@ impl Grab {
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).split(b'\n').map_while(|l| l.ok()) {
                 let line = String::from_utf8_lossy(&line);
-                if line.contains("showinfo @") {
+                // "[Parsed_showinfo_1 @ 0x…] n: 0 pts: … pts_time:0 …"
+                if line.contains("showinfo_") || line.contains("showinfo @") {
                     if line.contains("pts_time") {
                         let _ = first.set(Instant::now());
                     }
