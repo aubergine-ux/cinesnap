@@ -510,6 +510,9 @@ button:disabled {
 .workspace {
   grid-area: work;
   display: grid;
+  /* Without an explicit track the column grows to the timeline's content
+     and never shrinks again when the window gets narrower. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
@@ -520,6 +523,7 @@ button:disabled {
 .preview {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -632,6 +636,7 @@ input[type="range"]::-moz-range-thumb {
   background: var(--bg-panel);
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .tl-toolbar {
