@@ -336,8 +336,46 @@ impl Project {
             "{} is not a Cinesnap project",
             path.display()
         );
+        project
+            .validate()
+            .with_context(|| format!("{} is damaged", path.display()))?;
         project.sanitize();
         Ok(project)
+    }
+
+    /// Reject manifests no amount of clamping can make usable: a video with
+    /// no size or length, or tracks that point outside the bundle.
+    pub fn validate(&self) -> Result<()> {
+        let v = &self.source.video;
+        anyhow::ensure!(
+            v.width >= 2 && v.height >= 2,
+            "the video size {}x{} is not usable",
+            v.width,
+            v.height
+        );
+        anyhow::ensure!(
+            v.duration_ms.is_finite() && v.duration_ms > 0.0,
+            "the video has no duration"
+        );
+        anyhow::ensure!(
+            v.fps.is_finite() && v.fps > 0.0,
+            "the video has no frame rate"
+        );
+        let src = &self.source;
+        let files = [Some(&v.file), Some(&src.events.file)]
+            .into_iter()
+            .chain([
+                src.mic.as_ref().map(|m| &m.file),
+                src.webcam.as_ref().map(|w| &w.file),
+            ])
+            .flatten();
+        for file in files {
+            anyhow::ensure!(
+                is_bundle_file(file),
+                "{file:?} is not a file inside the recording"
+            );
+        }
+        Ok(())
     }
 
     /// Atomic save: write to a temp file next to the target, then rename.
@@ -353,16 +391,18 @@ impl Project {
     /// Clamp edit state into a valid range so downstream math never sees
     /// nonsense (hand-edited files, older versions, UI bugs).
     pub fn sanitize(&mut self) {
+        // `clamp` panics when min > max, so keep every bound well-formed
+        // even for a manifest that `validate` would reject.
         let (w, h) = (
-            self.source.video.width as f64,
-            self.source.video.height as f64,
+            self.source.video.width.max(2) as f64,
+            self.source.video.height.max(2) as f64,
         );
         let c = &mut self.crop;
-        c.x = c.x.clamp(0.0, (w - 2.0).max(0.0));
-        c.y = c.y.clamp(0.0, (h - 2.0).max(0.0));
+        c.x = c.x.clamp(0.0, w - 2.0);
+        c.y = c.y.clamp(0.0, h - 2.0);
         c.width = c.width.clamp(2.0, w - c.x);
         c.height = c.height.clamp(2.0, h - c.y);
-        let dur = self.source.video.duration_ms;
+        let dur = self.source.video.duration_ms.max(0.0);
         for z in &mut self.zooms {
             z.start_ms = z.start_ms.clamp(0.0, dur);
             z.end_ms = z.end_ms.clamp(z.start_ms, dur);
@@ -385,6 +425,14 @@ impl Project {
     pub fn events_path(&self, dir: &Path) -> PathBuf {
         dir.join(&self.source.events.file)
     }
+}
+
+/// A plain file name: no directories, no `..`, not absolute.
+fn is_bundle_file(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_)))
+        && parts.next().is_none()
+        && !name.contains(['/', '\\'])
 }
 
 /// Parse `#rgb`, `#rrggbb` or `#rrggbbaa`. Unparseable input yields opaque black.
@@ -410,6 +458,68 @@ mod tests {
         assert_eq!(parse_color("#6d5dfc"), [0x6d, 0x5d, 0xfc, 255]);
         assert_eq!(parse_color("#11223380"), [0x11, 0x22, 0x33, 0x80]);
         assert_eq!(parse_color("nope"), [0, 0, 0, 255]);
+    }
+
+    fn manifest(video: &str, events: &str) -> Project {
+        let json = format!(
+            r#"{{"format":"cinesnap-project","version":1,"createdAt":"x","app":"0",
+            "source":{{"video":{video},"events":{{"file":"{events}"}},"platform":"test","target":"screen"}},
+            "crop":{{"x":0,"y":0,"width":100,"height":50}}}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    const VIDEO: &str =
+        r#"{"file":"video.mp4","width":100,"height":50,"fps":30,"durationMs":1000}"#;
+
+    #[test]
+    fn damaged_manifests_are_rejected() {
+        assert!(manifest(VIDEO, "events.jsonl").validate().is_ok());
+        for video in [
+            r#"{"file":"video.mp4","width":0,"height":0,"fps":30,"durationMs":1000}"#,
+            r#"{"file":"video.mp4","width":100,"height":50,"fps":30,"durationMs":-5}"#,
+            r#"{"file":"video.mp4","width":100,"height":50,"fps":0,"durationMs":1000}"#,
+            r#"{"file":"/etc/hostname","width":100,"height":50,"fps":30,"durationMs":1000}"#,
+            r#"{"file":"a/video.mp4","width":100,"height":50,"fps":30,"durationMs":1000}"#,
+        ] {
+            assert!(
+                manifest(video, "events.jsonl").validate().is_err(),
+                "{video}"
+            );
+        }
+        for events in ["../events.jsonl", "..", "C:\\\\x.jsonl", ""] {
+            assert!(manifest(VIDEO, events).validate().is_err(), "{events}");
+        }
+    }
+
+    #[test]
+    fn sanitize_never_panics_on_nonsense() {
+        let mut p = manifest(
+            r#"{"file":"video.mp4","width":0,"height":1,"fps":0,"durationMs":-5}"#,
+            "events.jsonl",
+        );
+        p.crop = Rect {
+            x: -50.0,
+            y: 1e9,
+            width: 1e12,
+            height: 0.0,
+        };
+        p.zooms = serde_json::from_str(
+            r#"[{"id":"a","startMs":5000,"endMs":100,"scale":-3,"easeInMs":-1,"easeOutMs":1e12,"x":-1e9,"y":1e9}]"#,
+        )
+        .unwrap();
+        p.sanitize();
+        assert_eq!(
+            p.crop,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 2.0,
+                height: 2.0
+            }
+        );
+        assert_eq!((p.zooms[0].start_ms, p.zooms[0].end_ms), (0.0, 0.0));
+        assert_eq!(p.zooms[0].scale, 1.0);
     }
 
     #[test]
