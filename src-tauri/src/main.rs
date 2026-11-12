@@ -321,7 +321,10 @@ fn cancel_export(state: State<AppState>) {
 #[cfg(target_os = "linux")]
 fn webkit_workarounds() {
     let nvidia = Path::new("/proc/driver/nvidia/version").exists();
-    if nvidia && devices::is_wayland() && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    if nvidia
+        && devices::is_wayland()
+        && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+    {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 }
@@ -344,10 +347,15 @@ fn headless_record(args: &[String]) -> anyhow::Result<()> {
             other => dir = Some(PathBuf::from(other)),
         }
     }
-    let dir = dir.context("usage: cinesnap record <dir.cinesnap> [--seconds N] [--fps N] [--mic ID] [--webcam ID]")?;
+    let dir = dir.context(
+        "usage: cinesnap record <dir.cinesnap> [--seconds N] [--fps N] [--mic ID] [--webcam ID]",
+    )?;
     let ffmpeg = ffmpeg::locate(None).context("ffmpeg not found")?;
     let options = RecordOptions {
-        target: recorder::Target { kind: "screen".into(), id: None },
+        target: recorder::Target {
+            kind: "screen".into(),
+            id: None,
+        },
         region: None,
         mic,
         webcam,
