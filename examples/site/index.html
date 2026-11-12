@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit — projects</title>
+<style>
+  :root {
+    --bg: #0e1016; --panel: #161925; --line: #262a3b; --text: #e7e9f3; --dim: #8a90a8;
+    --accent: #6d5dfc; --accent-2: #e44d8a; --ok: #2fbf71;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 18px 32px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: rgba(14,16,22,.9);
+    backdrop-filter: blur(8px); z-index: 2;
+  }
+  .logo { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .brand { font-weight: 650; font-size: 18px; letter-spacing: .2px; }
+  .search {
+    margin-left: auto; display: flex; align-items: center; gap: 10px; padding: 8px 12px; width: 260px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; color: var(--dim);
+    font: inherit; font-size: 14px; cursor: pointer;
+  }
+  .search:hover { border-color: #3a4060; }
+  kbd {
+    margin-left: auto; font: 12px ui-monospace, monospace; padding: 2px 6px; border-radius: 6px;
+    background: #20243a; border: 1px solid var(--line); color: var(--dim);
+  }
+  button.primary {
+    font: inherit; font-size: 14px; font-weight: 600; color: #fff; border: 0; border-radius: 10px;
+    padding: 10px 16px; cursor: pointer; background: var(--accent); transition: transform .12s, filter .12s;
+  }
+  button.primary:hover { filter: brightness(1.12); }
+  button.primary:active { transform: scale(.97); }
+  main { max-width: 1080px; margin: 0 auto; padding: 36px 32px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  .sub { color: var(--dim); margin: 0 0 28px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 14px;
+    transition: transform .18s, border-color .18s, box-shadow .18s;
+  }
+  .card:hover { transform: translateY(-3px); border-color: #3a4060; box-shadow: 0 12px 30px rgba(0,0,0,.35); }
+  .card.new { animation: pop .45s cubic-bezier(.2,1.4,.4,1); border-color: var(--accent); }
+  .thumb { height: 120px; border-radius: 10px; margin-bottom: 12px; }
+  .card b { display: block; font-size: 15px; }
+  .card span { color: var(--dim); font-size: 13px; }
+  @keyframes pop { from { transform: scale(.85); opacity: 0; } }
+
+  .scrim { position: fixed; inset: 0; background: rgba(5,6,10,.55); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 5; }
+  .scrim.show { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 380px; background: var(--panel);
+    border-left: 1px solid var(--line); padding: 28px; transform: translateX(100%);
+    transition: transform .28s cubic-bezier(.2,.8,.2,1); z-index: 6; display: flex; flex-direction: column; gap: 14px;
+  }
+  .sheet.show { transform: none; }
+  .sheet h2 { margin: 0 0 6px; font-size: 20px; }
+  label { font-size: 13px; color: var(--dim); display: block; margin-bottom: 6px; }
+  input[type=text], select {
+    width: 100%; font: inherit; font-size: 15px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; outline: none;
+  }
+  input[type=text]:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(109,93,252,.25); }
+  .row { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text); }
+  .row input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .sheet .primary { margin-top: auto; padding: 12px; }
+
+  .palette {
+    position: fixed; left: 50%; top: 120px; width: 520px; transform: translate(-50%, -12px) scale(.98);
+    background: var(--panel); border: 1px solid #3a4060; border-radius: 14px; box-shadow: 0 30px 80px rgba(0,0,0,.6);
+    opacity: 0; pointer-events: none; transition: opacity .16s, transform .16s; z-index: 8; overflow: hidden;
+  }
+  .palette.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+  .palette input { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 16px 18px; background: transparent; }
+  .palette input:focus { box-shadow: none; border-color: var(--line); }
+  .palette ul { list-style: none; margin: 0; padding: 8px; }
+  .palette li { padding: 10px 12px; border-radius: 8px; font-size: 14px; color: var(--dim); }
+  .palette li.active { background: #23284a; color: var(--text); }
+  .palette li[hidden] { display: none; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 80px); background: var(--ok); color: #04210f;
+    font-weight: 600; font-size: 14px; padding: 12px 18px; border-radius: 12px; transition: transform .3s cubic-bezier(.2,1.3,.4,1); z-index: 9;
+  }
+  .toast.show { transform: translate(-50%, 0); }
+  body.light { --bg: #f5f6fa; --panel: #fff; --line: #dfe2ec; --text: #171a26; --dim: #636a82; }
+  body.light header { background: rgba(245,246,250,.9); }
+  body.light kbd, body.light .palette li.active { background: #eceefa; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"></div>
+  <div class="brand">Orbit</div>
+  <button class="search" id="search" type="button">Search or jump to… <kbd>Ctrl K</kbd></button>
+  <button class="primary" id="new" type="button">New project</button>
+</header>
+
+<main>
+  <h1>Projects</h1>
+  <p class="sub">Everything your team is working on, in one place.</p>
+  <div class="grid" id="grid"></div>
+</main>
+
+<div class="scrim" id="scrim"></div>
+
+<aside class="sheet" id="sheet" aria-label="New project">
+  <h2>New project</h2>
+  <div>
+    <label for="name">Name</label>
+    <input type="text" id="name" placeholder="Landing page" autocomplete="off">
+  </div>
+  <div>
+    <label for="kind">Template</label>
+    <select id="kind">
+      <option value="blank">Blank</option>
+      <option value="web">Website</option>
+      <option value="mobile">Mobile app</option>
+    </select>
+  </div>
+  <label class="row"><input type="checkbox" id="private"> Private to my team</label>
+  <button class="primary" id="create" type="button">Create project</button>
+</aside>
+
+<div class="palette" id="palette">
+  <input type="text" id="query" placeholder="Type a command…" autocomplete="off">
+  <ul id="commands">
+    <li data-run="new">New project</li>
+    <li data-run="theme">Toggle light theme</li>
+    <li data-run="top">Scroll to top</li>
+  </ul>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const tints = [['#6d5dfc', '#e44d8a'], ['#1fa2ff', '#12d8a0'], ['#f7971e', '#ffd200'], ['#ee0979', '#ff6a00'], ['#11998e', '#38ef7d'], ['#8e2de2', '#4a00e0']];
+  const names = ['Marketing site', 'Mobile onboarding', 'Billing revamp', 'Design system', 'Docs portal', 'Status page', 'Partner API', 'Growth experiments', 'Brand refresh'];
+
+  function card(name, note, i, fresh) {
+    const el = document.createElement('div');
+    el.className = 'card' + (fresh ? ' new' : '');
+    const [a, b] = tints[i % tints.length];
+    el.innerHTML = `<div class="thumb" style="background:linear-gradient(135deg,${a},${b})"></div><b></b><span></span>`;
+    el.querySelector('b').textContent = name;
+    el.querySelector('span').textContent = note;
+    return el;
+  }
+  names.forEach((n, i) => $('grid').append(card(n, `Updated ${i + 1} day${i ? 's' : ''} ago`, i)));
+
+  function toast(text) {
+    $('toast').textContent = text;
+    $('toast').classList.add('show');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => $('toast').classList.remove('show'), 2600);
+  }
+
+  function sheet(open) {
+    $('sheet').classList.toggle('show', open);
+    $('scrim').classList.toggle('show', open || $('palette').classList.contains('show'));
+    if (open) setTimeout(() => $('name').focus(), 250);
+  }
+
+  function palette(open) {
+    $('palette').classList.toggle('show', open);
+    $('scrim').classList.toggle('show', open || $('sheet').classList.contains('show'));
+    if (open) {
+      $('query').value = '';
+      filter();
+      $('query').focus();
+    }
+  }
+
+  function filter() {
+    const q = $('query').value.trim().toLowerCase();
+    let first = true;
+    for (const li of $('commands').children) {
+      li.hidden = !li.textContent.toLowerCase().includes(q);
+      li.classList.toggle('active', !li.hidden && first);
+      if (!li.hidden) first = false;
+    }
+  }
+
+  function runCommand(name) {
+    palette(false);
+    if (name === 'new') sheet(true);
+    if (name === 'theme') {
+      document.body.classList.toggle('light');
+      toast('Theme switched');
+    }
+    if (name === 'top') scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  $('new').onclick = () => sheet(true);
+  $('search').onclick = () => palette(true);
+  $('scrim').onclick = () => { sheet(false); palette(false); };
+  $('query').oninput = filter;
+  $('commands').onclick = (e) => e.target.dataset.run && runCommand(e.target.dataset.run);
+  $('create').onclick = () => {
+    const name = $('name').value.trim() || 'Untitled project';
+    const note = $('kind').selectedOptions[0].textContent + ($('private').checked ? ' · private' : '');
+    $('grid').prepend(card(name, note, $('grid').children.length, true));
+    $('name').value = '';
+    sheet(false);
+    toast(`Created “${name}”`);
+  };
+
+  addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      palette(!$('palette').classList.contains('show'));
+    } else if (e.key === 'Escape') {
+      sheet(false);
+      palette(false);
+    } else if (e.key === 'Enter') {
+      if ($('palette').classList.contains('show')) {
+        const active = $('commands').querySelector('.active');
+        if (active) runCommand(active.dataset.run);
+      } else if ($('sheet').classList.contains('show')) {
+        $('create').click();
+      }
+    }
+  });
+</script>
+</body>
+</html>

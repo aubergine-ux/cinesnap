@@ -1,0 +1,21 @@
+{
+  "name": "cinesnap-script",
+  "version": "0.1.0",
+  "description": "Record scripted browser demos as Cinesnap bundles",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "bin": {
+    "cinesnap-script": "bin/cinesnap-script.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "playwright": "^1.65.0",
+    "yaml": "^2.9.1"
+  }
+}

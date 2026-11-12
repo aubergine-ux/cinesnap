@@ -61,3 +61,89 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  # The standalone command-line renderer, attached to the same release. The
+  # GitHub Action (action.yml) downloads these by name.
+  cli:
+    # After the installers, so the release for this tag already exists and
+    # the two jobs never race to create it.
+    needs: build
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # An older Ubuntu, so the binary also runs on older glibc.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: cinesnap-cli-linux-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: cinesnap-cli-macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: cinesnap-cli-macos-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: cinesnap-cli-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # whisper.cpp is compiled in: cmake and a C++ compiler are on the
+      # runners already, bindgen needs libclang.
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev cmake
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release -p cinesnap-core --bin cinesnap-cli --target ${{ matrix.target }}
+
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Same tag the installers use: the pushed tag, or v<app version>
+          # for a manual run.
+          if [ "$REF_TYPE" = tag ]; then
+            tag="$REF_NAME"
+          else
+            tag="v$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          fi
+
+          exe=""
+          case "$ASSET" in *.exe) exe=".exe" ;; esac
+          mkdir -p upload
+          cp "target/$TARGET/release/cinesnap-cli$exe" "upload/$ASSET"
+
+          # The installer job normally created the (draft) release. If it did
+          # not get that far, make one so the binaries still land somewhere.
+          for attempt in 1 2 3 4 5; do
+            if gh release view "$tag" >/dev/null 2>&1; then break; fi
+            if gh release create "$tag" --draft --title "Cinesnap ${tag#v}" \
+              --notes "See the assets below to download and install this version." >/dev/null 2>&1; then break; fi
+            sleep $((attempt * 5))
+          done
+
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$tag" "upload/$ASSET" --clobber; then exit 0; fi
+            echo "upload failed (attempt $attempt), retrying"
+            sleep $((attempt * 10))
+          done
+          echo "::error::could not attach $ASSET to release $tag"
+          exit 1
