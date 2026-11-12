@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { pickImage } from "../lib/api";
 import { GIF_PRESETS, outputFps, outputSize } from "../lib/layout";
 import { useStore } from "../lib/store";
-import type { Aspect, Background, Corner, Easing, ExportFormat, Project, Quality, ZoomMode } from "../lib/types";
+import type { Aspect, Background, Corner, Easing, ExportFormat, Project, Quality, Rect, ZoomMode } from "../lib/types";
 import { ColorInput, Section, Segmented, Slider, Toggle } from "./controls";
 
 const GRADIENTS: { from: string; to: string; angle: number }[] = [
@@ -16,6 +16,10 @@ const GRADIENTS: { from: string; to: string; angle: number }[] = [
   { from: "#f43f5e", to: "#7c3aed", angle: 200 },
 ];
 
+/** Smallest crop side, in source pixels. */
+const MIN_CROP = 64;
+
+const px = (v: number) => `${Math.round(v)}px`;
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const ms = (v: number) => `${(v / 1000).toFixed(2)}s`;
 
@@ -42,6 +46,11 @@ export function SettingsPanel({ onExport }: { onExport: () => void }) {
     if (!path) return;
     setBg(type === "image" ? { type, path } : { type, path, blur: bg.type === "wallpaper" ? bg.blur : 40 });
   };
+
+  const video = project.source.video;
+  const crop = project.crop;
+  const cropped = crop.width < video.width || crop.height < video.height;
+  const setCrop = (patch: Partial<Rect>) => set("crop", (p) => void Object.assign(p.crop, patch));
 
   const exp = project.export;
   const size = outputSize(project.frame.aspect, project.crop, exp);
@@ -189,6 +198,17 @@ export function SettingsPanel({ onExport }: { onExport: () => void }) {
             {bg.type === "wallpaper" && <Slider label="Blur" value={bg.blur} min={0} max={120} step={1} format={(v) => `${v}px`} onChange={(v) => setBg({ ...bg, blur: v }, "bg:blur")} />}
           </>
         )}
+      </Section>
+
+      <Section title="Crop" defaultOpen={cropped}>
+        <Slider label="Left" value={crop.x} min={0} max={video.width - MIN_CROP} step={2} format={px} onChange={(v) => setCrop({ x: v, width: Math.min(crop.width, video.width - v) })} />
+        <Slider label="Top" value={crop.y} min={0} max={video.height - MIN_CROP} step={2} format={px} onChange={(v) => setCrop({ y: v, height: Math.min(crop.height, video.height - v) })} />
+        <Slider label="Width" value={crop.width} min={MIN_CROP} max={video.width - crop.x} step={2} format={px} onChange={(v) => setCrop({ width: v })} />
+        <Slider label="Height" value={crop.height} min={MIN_CROP} max={video.height - crop.y} step={2} format={px} onChange={(v) => setCrop({ height: v })} />
+        <button className="btn wide" disabled={!cropped} onClick={() => setCrop({ x: 0, y: 0, width: video.width, height: video.height })}>
+          Use the whole recording
+        </button>
+        <p className="hint">Nothing is thrown away: the full recording stays in the file, so the crop can be changed at any time.</p>
       </Section>
 
       {hasWebcam && (
