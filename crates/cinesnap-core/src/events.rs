@@ -64,7 +64,12 @@ pub enum EventKind {
         x: f64,
         y: f64,
     },
-    Key,
+    /// A key went down. Typed characters are never recorded; `combo` is
+    /// only present for shortcuts and navigation keys (`Ctrl+K`, `Enter`).
+    Key {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        combo: Option<String>,
+    },
     Scroll {
         dx: f64,
         dy: f64,
@@ -102,6 +107,120 @@ impl Event {
             _ => None,
         }
     }
+}
+
+/// Modifier keys held while a key goes down.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Modifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub meta: bool,
+}
+
+/// What a platform key name means for the keystroke overlay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyName {
+    Ctrl,
+    Alt,
+    Shift,
+    Meta,
+    /// A key that types a character; the label is what is printed on it.
+    Printing(String),
+    /// A key that does something: Enter, Esc, arrows, function keys.
+    Action(String),
+    /// Not worth showing (lock keys, media keys, unknown codes).
+    Other,
+}
+
+/// Classify a key from its platform name: the kernel's `KEY_LEFTCTRL` style
+/// or the `LControl` style used on the other platforms.
+pub fn key_name(raw: &str) -> KeyName {
+    let upper = raw.trim().to_ascii_uppercase();
+    let name = upper.strip_prefix("KEY_").unwrap_or(&upper);
+    let action = |s: &str| KeyName::Action(s.into());
+    let printing = |s: &str| KeyName::Printing(s.into());
+    match name {
+        "LEFTCTRL" | "RIGHTCTRL" | "LCONTROL" | "RCONTROL" => KeyName::Ctrl,
+        "LEFTALT" | "RIGHTALT" | "LALT" | "RALT" | "LOPTION" | "ROPTION" => KeyName::Alt,
+        "LEFTSHIFT" | "RIGHTSHIFT" | "LSHIFT" | "RSHIFT" => KeyName::Shift,
+        "LEFTMETA" | "RIGHTMETA" | "LMETA" | "RMETA" | "COMMAND" | "RCOMMAND" => KeyName::Meta,
+        "ENTER" | "KPENTER" | "NUMPADENTER" => action("Enter"),
+        "ESC" | "ESCAPE" => action("Esc"),
+        "TAB" => action("Tab"),
+        "BACKSPACE" => action("Backspace"),
+        "DELETE" => action("Delete"),
+        "INSERT" => action("Insert"),
+        "SPACE" => action("Space"),
+        "UP" => action("Up"),
+        "DOWN" => action("Down"),
+        "LEFT" => action("Left"),
+        "RIGHT" => action("Right"),
+        "HOME" => action("Home"),
+        "END" => action("End"),
+        "PAGEUP" => action("PageUp"),
+        "PAGEDOWN" => action("PageDown"),
+        "MINUS" => printing("-"),
+        "EQUAL" => printing("="),
+        "COMMA" => printing(","),
+        "DOT" => printing("."),
+        "SLASH" => printing("/"),
+        "SEMICOLON" => printing(";"),
+        "APOSTROPHE" => printing("'"),
+        "LEFTBRACE" | "LEFTBRACKET" => printing("["),
+        "RIGHTBRACE" | "RIGHTBRACKET" => printing("]"),
+        "BACKSLASH" => printing("\\"),
+        "GRAVE" => printing("`"),
+        _ => {
+            let digit = name.strip_prefix("KEY").unwrap_or(name);
+            if name.len() == 1 && name.chars().all(|c| c.is_ascii_alphanumeric()) {
+                printing(name)
+            } else if digit.len() == 1 && digit.chars().all(|c| c.is_ascii_digit()) {
+                printing(digit)
+            } else if name.len() <= 3
+                && name.starts_with('F')
+                && name[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n))
+            {
+                action(name)
+            } else {
+                KeyName::Other
+            }
+        }
+    }
+}
+
+/// The label to show for a key press, or `None` when it must not be
+/// recorded. Only shortcuts (a key with Ctrl, Alt or the OS key held) and
+/// action keys are kept, so nothing that is typed — passwords included —
+/// ever reaches the log.
+pub fn shortcut(mods: Modifiers, key: &KeyName) -> Option<String> {
+    let chord = mods.ctrl || mods.alt || mods.meta;
+    let label = match key {
+        KeyName::Printing(k) if chord => k,
+        // Space and Backspace on their own are typing.
+        KeyName::Action(k) if chord || !matches!(k.as_str(), "Space" | "Backspace") => k,
+        _ => return None,
+    };
+    let meta = if cfg!(target_os = "macos") {
+        "Cmd"
+    } else if cfg!(windows) {
+        "Win"
+    } else {
+        "Super"
+    };
+    let mut parts = Vec::new();
+    for (held, name) in [
+        (mods.ctrl, "Ctrl"),
+        (mods.alt, "Alt"),
+        (mods.shift, "Shift"),
+        (mods.meta, meta),
+    ] {
+        if held {
+            parts.push(name);
+        }
+    }
+    parts.push(label);
+    Some(parts.join("+"))
 }
 
 #[derive(Clone, Debug)]
@@ -231,6 +350,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_shortcuts_and_action_keys_are_labelled() {
+        let none = Modifiers::default();
+        let ctrl = Modifiers { ctrl: true, ..none };
+        let shift = Modifiers {
+            shift: true,
+            ..none
+        };
+        let label = |m: Modifiers, raw: &str| shortcut(m, &key_name(raw));
+        // Typing is never recorded, with or without Shift.
+        for raw in [
+            "KEY_A",
+            "a",
+            "Key7",
+            "KEY_7",
+            "KEY_SPACE",
+            "Backspace",
+            "KEY_DOT",
+        ] {
+            assert_eq!(label(none, raw), None, "{raw}");
+            assert_eq!(label(shift, raw), None, "{raw}");
+        }
+        assert_eq!(label(ctrl, "KEY_K").as_deref(), Some("Ctrl+K"));
+        assert_eq!(label(ctrl, "Key1").as_deref(), Some("Ctrl+1"));
+        assert_eq!(label(ctrl, "Slash").as_deref(), Some("Ctrl+/"));
+        assert_eq!(label(ctrl, "Space").as_deref(), Some("Ctrl+Space"));
+        assert_eq!(
+            label(
+                Modifiers {
+                    ctrl: true,
+                    alt: true,
+                    shift: true,
+                    meta: false
+                },
+                "P"
+            )
+            .as_deref(),
+            Some("Ctrl+Alt+Shift+P")
+        );
+        assert_eq!(label(none, "KEY_ENTER").as_deref(), Some("Enter"));
+        assert_eq!(label(none, "Escape").as_deref(), Some("Esc"));
+        assert_eq!(label(shift, "KEY_TAB").as_deref(), Some("Shift+Tab"));
+        assert_eq!(label(none, "F5").as_deref(), Some("F5"));
+        assert_eq!(label(none, "KEY_F12").as_deref(), Some("F12"));
+        // Modifiers on their own, and keys with no sensible label.
+        for raw in [
+            "KEY_LEFTCTRL",
+            "LShift",
+            "KEY_CAPSLOCK",
+            "KEY_VOLUMEUP",
+            "F99",
+            "",
+        ] {
+            assert_eq!(label(ctrl, raw), None, "{raw}");
+        }
+    }
+
+    #[test]
     fn parses_documented_example() {
         let text = r#"{"format":"cinesnap-events","version":1,"width":2560,"height":1440,"clicks":"exact","cursor":"metadata"}
 {"t":12.4,"k":"move","x":812.0,"y":430.5}
@@ -249,7 +425,7 @@ mod tests {
             7,
             "unknown kind and truncated line are skipped"
         );
-        assert_eq!(log.events[3].kind, EventKind::Key);
+        assert_eq!(log.events[3].kind, EventKind::Key { combo: None });
         assert!(matches!(
             log.events[1].kind,
             EventKind::Down {
@@ -278,7 +454,7 @@ mod tests {
         w.write(&ev).unwrap();
         w.write(&Event {
             t: 2.0,
-            kind: EventKind::Key,
+            kind: EventKind::Key { combo: None },
         })
         .unwrap();
         w.flush().unwrap();

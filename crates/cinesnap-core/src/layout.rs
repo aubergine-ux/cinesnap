@@ -1,5 +1,6 @@
 //! Output geometry shared by the preview and the exporter.
 
+use crate::presets::SizeRule;
 use crate::project::{Project, Rect};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,50 +35,59 @@ pub fn aspect_ratio(aspect: &str, crop: Rect) -> f64 {
 /// Output size for a preset. Video presets fix the shorter side, GIF presets
 /// fix the width.
 pub fn output_size(preset: &str, ratio: f64) -> (u32, u32) {
-    let by_width = |w: f64| (even(w), even(w / ratio));
-    let by_short = |p: f64| {
-        if ratio >= 1.0 {
-            (even(p * ratio), even(p))
-        } else {
-            (even(p), even(p / ratio))
-        }
-    };
-    match preset {
-        "4k" => by_short(2160.0),
-        "1440p" => by_short(1440.0),
-        "720p" => by_short(720.0),
-        "readme" => by_width(800.0),
-        "small" => by_width(480.0),
-        _ => by_short(1080.0),
+    let rule = crate::presets::find(preset).map_or(SizeRule::Short(1080), |p| p.size);
+    match rule {
+        SizeRule::Width(w) => (even(w as f64), even(w as f64 / ratio)),
+        SizeRule::Short(p) if ratio >= 1.0 => (even(p as f64 * ratio), even(p as f64)),
+        SizeRule::Short(p) => (even(p as f64), even(p as f64 / ratio)),
     }
 }
 
-/// Output frame rate: GIF presets carry their own, video uses the setting.
+/// Output frame rate: some presets carry their own, the rest use the setting.
 pub fn output_fps(project: &Project) -> u32 {
-    if project.export.format == "gif" {
-        match project.export.preset.as_str() {
-            "readme" => return 15,
-            "small" => return 12,
-            _ => {}
-        }
-    }
-    project.export.fps.max(1)
+    let preset = crate::presets::resolve(&project.export.preset, &project.export.format);
+    preset.fps.unwrap_or(project.export.fps).max(1)
+}
+
+/// Crop of the first recording on the timeline: the one that decides the
+/// output shape when the aspect is `source`.
+pub fn main_crop(project: &Project) -> Rect {
+    project
+        .clips
+        .iter()
+        .find_map(|c| c.recording())
+        .map_or(project.crop, |r| r.crop)
+}
+
+/// Width / height of the output.
+pub fn output_ratio(project: &Project) -> f64 {
+    let preset = crate::presets::resolve(&project.export.preset, &project.export.format);
+    aspect_ratio(
+        preset.aspect.unwrap_or(&project.frame.aspect),
+        main_crop(project),
+    )
 }
 
 impl Layout {
+    /// Layout for the first recording on the timeline.
     pub fn new(project: &Project) -> Self {
-        let ratio = aspect_ratio(&project.frame.aspect, project.crop);
-        let (width, height) = output_size(&project.export.preset, ratio);
-        Self::with_size(project, width, height)
+        Self::for_crop(project, main_crop(project))
     }
 
-    pub fn with_size(project: &Project, width: u32, height: u32) -> Self {
+    /// Layout for a recording with the given crop. The output size is the
+    /// same for every clip; only the frame inside it differs.
+    pub fn for_crop(project: &Project, crop: Rect) -> Self {
+        let (width, height) = output_size(&project.export.preset, output_ratio(project));
+        Self::with_size(project, crop, width, height)
+    }
+
+    pub fn with_size(project: &Project, crop: Rect, width: u32, height: u32) -> Self {
         let (w, h) = (width as f64, height as f64);
         let short = w.min(h);
         let s = short / 1080.0;
         let pad = project.frame.padding * short;
         let (aw, ah) = ((w - 2.0 * pad).max(2.0), (h - 2.0 * pad).max(2.0));
-        let crop_ratio = project.crop.width / project.crop.height;
+        let crop_ratio = crop.width / crop.height;
         let (fw, fh) = if aw / ah > crop_ratio {
             (ah * crop_ratio, ah)
         } else {
@@ -140,7 +150,7 @@ mod tests {
         assert!((l.frame.y + l.frame.height / 2.0 - 960.0).abs() < 1e-9);
 
         p.frame.aspect = "source".into();
-        p.crop = Rect {
+        p.main_mut().crop = Rect {
             x: 0.0,
             y: 0.0,
             width: 1000.0,

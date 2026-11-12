@@ -1,6 +1,6 @@
 // Layout math shared by the preview renderer. The export compositor follows the same rules.
 
-import type { Aspect, Corner, ExportSettings, Rect } from "./types";
+import type { Aspect, Corner, ExportPreset, ExportSettings, Rect } from "./types";
 
 export interface Size {
   width: number;
@@ -14,11 +14,28 @@ export interface Box {
   h: number;
 }
 
-export const MP4_PRESETS: Record<string, number> = { "4k": 2160, "1440p": 1440, "1080p": 1080, "720p": 720 };
-export const GIF_PRESETS: Record<string, { width: number; fps: number }> = {
-  readme: { width: 800, fps: 15 },
-  small: { width: 480, fps: 12 },
-};
+const MB = 1024 * 1024;
+const plain = (id: string, label: string, short: number): ExportPreset => ({ id, label, hint: "", format: "mp4", size: { short }, fps: null, aspect: null, maxBytes: null, maxSeconds: null });
+
+/** Mirrors `presets.rs` in the core. */
+export const PRESETS: ExportPreset[] = [
+  { id: "readme", label: "GitHub README", hint: "GIF, 800 px wide, under GitHub's 10 MB image limit", format: "gif", size: { width: 800 }, fps: 15, aspect: null, maxBytes: 10 * MB, maxSeconds: null },
+  { id: "readme-mp4", label: "GitHub video", hint: "MP4, 720p, under GitHub's 10 MB upload limit", format: "mp4", size: { short: 720 }, fps: 30, aspect: null, maxBytes: 10 * MB, maxSeconds: null },
+  { id: "x", label: "X / Twitter", hint: "MP4, 1080p, 30 fps, at most 2:20 and 512 MB", format: "mp4", size: { short: 1080 }, fps: 30, aspect: null, maxBytes: 512 * MB, maxSeconds: 140 },
+  { id: "youtube", label: "YouTube", hint: "MP4, 1440p, 60 fps (YouTube keeps more detail above 1080p)", format: "mp4", size: { short: 1440 }, fps: 60, aspect: null, maxBytes: null, maxSeconds: null },
+  { id: "shorts", label: "TikTok / Shorts", hint: "MP4, vertical 1080×1920, 30 fps, at most 3 minutes", format: "mp4", size: { short: 1080 }, fps: 30, aspect: "9:16", maxBytes: null, maxSeconds: 180 },
+  plain("4k", "4K", 2160),
+  plain("1440p", "1440p", 1440),
+  plain("1080p", "1080p", 1080),
+  plain("720p", "720p", 720),
+  { id: "small", label: "Small GIF", hint: "GIF, 480 px wide", format: "gif", size: { width: 480 }, fps: 12, aspect: null, maxBytes: null, maxSeconds: null },
+];
+
+/** The preset for the export settings, or the default for the format. */
+export function resolvePreset(exp: ExportSettings): ExportPreset {
+  const found = PRESETS.find((p) => p.id === exp.preset && p.format === exp.format);
+  return found ?? PRESETS.find((p) => p.id === (exp.format === "gif" ? "readme" : "1080p"))!;
+}
 
 /** Width / height of the output for an aspect preset. */
 export function aspectRatio(aspect: Aspect, crop: Rect): number {
@@ -38,21 +55,23 @@ export function aspectRatio(aspect: Aspect, crop: Rect): number {
 
 const even = (v: number) => Math.max(2, Math.round(v / 2) * 2);
 
+/** Aspect the export will actually use: some presets force their own. */
+export function effectiveAspect(aspect: Aspect, exp: ExportSettings): Aspect {
+  return resolvePreset(exp).aspect ?? aspect;
+}
+
 /** Output pixel size for the chosen aspect and export preset. */
 export function outputSize(aspect: Aspect, crop: Rect, exp: ExportSettings): Size {
-  const a = aspectRatio(aspect, crop);
-  if (exp.format === "gif") {
-    const width = (GIF_PRESETS[exp.preset] ?? GIF_PRESETS.readme).width;
-    return { width: even(width), height: even(width / a) };
-  }
-  const short = MP4_PRESETS[exp.preset] ?? 1080;
+  const preset = resolvePreset(exp);
+  const a = aspectRatio(preset.aspect ?? aspect, crop);
+  if ("width" in preset.size) return { width: even(preset.size.width), height: even(preset.size.width / a) };
+  const short = preset.size.short;
   return a >= 1 ? { width: even(short * a), height: even(short) } : { width: even(short), height: even(short / a) };
 }
 
 /** Frame rate the export (and therefore the motion tracks) will use. */
 export function outputFps(exp: ExportSettings): number {
-  if (exp.format === "gif") return (GIF_PRESETS[exp.preset] ?? GIF_PRESETS.readme).fps;
-  return exp.fps;
+  return Math.max(1, resolvePreset(exp).fps ?? exp.fps);
 }
 
 /** Largest size with the given aspect ratio that fits inside maxW x maxH. */
@@ -101,14 +120,24 @@ export function mapPoint(frame: Box, view: Box, x: number, y: number): { x: numb
   };
 }
 
-/** Square box of the webcam overlay. */
-export function webcamRect(W: number, H: number, size: number, corner: Corner): Box {
-  const m = Math.min(W, H);
-  const side = size * m;
-  const margin = 0.03 * m;
-  const x = corner.endsWith("left") ? margin : W - margin - side;
-  const y = corner.startsWith("top") ? margin : H - margin - side;
-  return { x, y, w: side, h: side };
+export const WEBCAM_MARGIN = 0.03;
+
+/** Centre of a cornered webcam bubble, as fractions of the output. */
+export function cornerCentre(corner: Corner, size: number, ratio: number): { x: number; y: number } {
+  const kx = ratio >= 1 ? 1 / ratio : 1;
+  const ky = ratio >= 1 ? 1 : ratio;
+  const off = WEBCAM_MARGIN + size / 2;
+  return {
+    x: corner.endsWith("left") ? off * kx : 1 - off * kx,
+    y: corner.startsWith("top") ? off * ky : 1 - off * ky,
+  };
+}
+
+/** Box of the webcam bubble for a state from the motion tracks. */
+export function webcamBox(W: number, H: number, x: number, y: number, size: number, alpha: number): Box {
+  // The bubble shrinks a little as it fades.
+  const side = size * Math.min(W, H) * (0.85 + 0.15 * alpha);
+  return { x: x * W - side / 2, y: y * H - side / 2, w: side, h: side };
 }
 
 /** Source rectangle that cover-fills a destination of the given aspect. */

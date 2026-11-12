@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { aspectRatio, fitSize } from "../lib/layout";
+import { outputRatio } from "../lib/edit";
+import { fitSize } from "../lib/layout";
 import { useStore } from "../lib/store";
 import { formatTime } from "../lib/timeline";
 import { Player } from "../render/player";
+import { EditOverlay } from "./EditOverlay";
 
 function Transport() {
   const frame = useStore((s) => s.frame);
@@ -39,7 +41,7 @@ function Transport() {
 
 export function Preview() {
   const path = useStore((s) => s.projectPath)!;
-  const aspect = useStore((s) => aspectRatio(s.project!.frame.aspect, s.project!.crop));
+  const aspect = useStore((s) => outputRatio(s.project!));
   const ready = useStore((s) => s.motion !== null);
   const stage = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -56,9 +58,8 @@ export function Preview() {
   }, []);
 
   useEffect(() => {
-    const project = useStore.getState().project;
-    if (!canvas.current || !project) return;
-    const player = new Player(canvas.current, path, project);
+    if (!canvas.current) return;
+    const player = new Player(canvas.current, path);
     return () => player.destroy();
   }, [path]);
 
@@ -67,7 +68,10 @@ export function Preview() {
   return (
     <div className="preview">
       <div className="stage" ref={stage}>
-        <canvas ref={canvas} className={ready ? "ready" : ""} style={{ width: Math.floor(size.width), height: Math.floor(size.height) }} />
+        <div className="canvas-wrap" style={{ width: Math.floor(size.width), height: Math.floor(size.height) }}>
+          <canvas ref={canvas} className={ready ? "ready" : ""} style={{ width: Math.floor(size.width), height: Math.floor(size.height) }} />
+          <EditOverlay width={Math.floor(size.width)} height={Math.floor(size.height)} />
+        </div>
       </div>
       <Transport />
     </div>

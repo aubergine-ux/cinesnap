@@ -13,6 +13,7 @@ export function Home() {
   const [mic, setMic] = useState(NONE);
   const [webcam, setWebcam] = useState(NONE);
   const [fps, setFps] = useState(60);
+  const [shortcuts, setShortcuts] = useState(true);
   const [useRegion, setUseRegion] = useState(false);
   const [region, setRegion] = useState<Rect>({ x: 0, y: 0, width: 1280, height: 720 });
   const [starting, setStarting] = useState(false);
@@ -49,6 +50,7 @@ export function Home() {
       mic: mic === NONE ? null : mic,
       webcam: webcam === NONE ? null : webcam,
       fps,
+      shortcuts,
     };
     setStarting(true);
     try {
@@ -156,6 +158,13 @@ export function Home() {
               { value: 60, label: "60 fps" },
             ]}
           />
+        </div>
+
+        <div className="field inline">
+          <span className="field-label" title="Shortcuts such as Ctrl+K and keys like Enter can be shown in the video. Text you type is never recorded.">
+            Record shortcuts
+          </span>
+          <Toggle label="" value={shortcuts} onChange={setShortcuts} />
         </div>
 
         <button className="record" disabled={!target || starting || ffmpegMissing} onClick={record}>

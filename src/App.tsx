@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { api } from "./lib/api";
 import { useStore } from "./lib/store";
 import { Editor } from "./screens/Editor";
 import { Home } from "./screens/Home";
@@ -16,6 +17,8 @@ export function App() {
 
   useEffect(() => {
     if (!error) return;
+    // Also in the backend log, for when the app is started from a terminal.
+    api.clientLog(`error: ${error}`);
     const t = setTimeout(() => setError(null), 8000);
     return () => clearTimeout(t);
   }, [error, setError]);
