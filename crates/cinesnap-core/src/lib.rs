@@ -1,15 +1,23 @@
 //! Core of Cinesnap: the project format, the motion model, the frame
 //! compositor and the export pipeline. Nothing here depends on the GUI.
 
+pub mod audio;
 pub mod cli;
+pub mod clips;
 pub mod events;
 pub mod export;
 pub mod ffmpeg;
 pub mod layout;
 pub mod motion;
+pub mod music;
+pub mod presets;
 pub mod project;
 pub mod render;
+pub mod share;
 pub mod synth;
+pub mod text;
+pub mod transcribe;
+pub mod transcript;
 
 #[cfg(test)]
 pub(crate) mod testutil {

@@ -325,7 +325,7 @@ pub fn generate(dir: &Path, ffmpeg: &Path, opts: &SynthOptions) -> Result<Projec
     while kt <= TYPING.1 {
         events.push(Event {
             t: kt * 1000.0,
-            kind: EventKind::Key,
+            kind: EventKind::Key { combo: None },
         });
         kt += TYPING.2;
     }
@@ -375,7 +375,7 @@ pub fn generate(dir: &Path, ffmpeg: &Path, opts: &SynthOptions) -> Result<Projec
         "2026-01-01T00:00:00Z".into(),
     );
     let log = crate::events::EventLog { header, events };
-    project.zooms = crate::motion::auto_zoom(&project, &log);
+    project.zooms = crate::motion::auto_zoom(&project, &[log]);
     project.save(dir)?;
     Ok(project)
 }

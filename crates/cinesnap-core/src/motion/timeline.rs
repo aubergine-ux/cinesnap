@@ -60,6 +60,22 @@ impl Kept {
         None
     }
 
+    /// Like [`src_to_out`](Self::src_to_out), but a time inside a cut maps
+    /// to the point where the cut was made.
+    pub fn map(&self, src_ms: f64) -> f64 {
+        let mut acc = 0.0;
+        for &(s, e) in &self.ranges {
+            if src_ms < s {
+                return acc;
+            }
+            if src_ms < e {
+                return acc + src_ms - s;
+            }
+            acc += e - s;
+        }
+        acc
+    }
+
     pub fn contains(&self, src_ms: f64) -> bool {
         self.src_to_out(src_ms).is_some()
     }

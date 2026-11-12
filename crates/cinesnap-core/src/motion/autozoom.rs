@@ -62,7 +62,7 @@ fn interest_points(project: &Project, log: &EventLog) -> Vec<Point> {
                     inferred,
                 });
             }
-            EventKind::Key if project.auto_zoom.on_typing => {
+            EventKind::Key { .. } if project.auto_zoom.on_typing => {
                 if burst.last().is_some_and(|&t| e.t - t > TYPING_GAP_MS) {
                     flush(&mut burst, burst_pos, &mut points);
                 }
@@ -175,7 +175,7 @@ mod tests {
     fn key(t: f64) -> Event {
         Event {
             t,
-            kind: EventKind::Key,
+            kind: EventKind::Key { combo: None },
         }
     }
     fn log(events: Vec<Event>) -> EventLog {
