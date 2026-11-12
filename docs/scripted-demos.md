@@ -365,7 +365,8 @@ jobs:
           node-version: 22
       - run: npm ci
 
-      - uses: aubergine-ux/cinesnap@v0
+      # or pin a release tag, such as @v0.2.0
+      - uses: aubergine-ux/cinesnap@main
         with:
           script: demo.yml
           output: docs/demo.gif
