@@ -114,10 +114,11 @@ impl Grab {
 }
 
 /// A screen (or the part of the desktop) to capture, in desktop pixels.
+/// Which fields are used depends on the platform's grabber.
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ScreenArea {
-    /// Position in the OS's screen list (used on Windows and macOS).
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    /// Position in the OS's screen list (Windows and macOS).
     pub index: usize,
     pub x: i32,
     pub y: i32,
