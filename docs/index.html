@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cinesnap — documentation</title>
+<meta name="description" content="Cinesnap is an open-source screen recorder that turns raw recordings into polished demo videos.">
+<link rel="icon" href="media/icon.png">
+<style>
+:root{--bg:#0d0e12;--panel:#15171e;--line:#252836;--text:#e8eaf2;--dim:#9aa0b4;--accent:#8b7dff;--pink:#e44d8a;--code:#1b1e28}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.65 system-ui,-apple-system,"Segoe UI",Inter,sans-serif}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+header.top{position:sticky;top:0;z-index:5;background:rgba(13,14,18,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+header.top .wrap{display:flex;align-items:center;gap:22px;height:58px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;color:var(--text)}
+.brand img{width:26px;height:26px}
+nav{display:flex;gap:18px;margin-left:auto;font-size:14px;overflow-x:auto;white-space:nowrap}
+nav a{color:var(--dim)}nav a:hover{color:var(--text);text-decoration:none}
+.hero{padding:72px 0 36px;text-align:center}
+.hero h1{font-size:clamp(34px,6vw,56px);line-height:1.08;margin:0 0 16px;letter-spacing:-.02em}
+.hero h1 span{background:linear-gradient(120deg,#8b7dff,#e44d8a);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{color:var(--dim);font-size:19px;max-width:640px;margin:0 auto 28px}
+.btn{display:inline-block;padding:11px 20px;border-radius:10px;font-weight:600;margin:4px}
+.btn.primary{background:linear-gradient(120deg,#6d5dfc,#e44d8a);color:#fff}
+.btn.ghost{border:1px solid var(--line);color:var(--text)}
+.btn:hover{text-decoration:none;filter:brightness(1.1)}
+.shot{border:1px solid var(--line);border-radius:14px;max-width:100%;display:block;margin:34px auto 0;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+section{padding:54px 0;border-top:1px solid var(--line)}
+h2{font-size:28px;letter-spacing:-.01em;margin:0 0 8px}
+h3{font-size:18px;margin:28px 0 6px}
+.lead{color:var(--dim);margin:0 0 24px;max-width:720px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+.card h3{margin:0 0 6px;font-size:16px}
+.card p{margin:0;color:var(--dim);font-size:14.5px}
+ol.steps{counter-reset:s;list-style:none;padding:0;display:grid;gap:12px;max-width:760px}
+ol.steps li{counter-increment:s;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px 14px 56px;position:relative}
+ol.steps li::before{content:counter(s);position:absolute;left:16px;top:14px;width:26px;height:26px;border-radius:50%;background:var(--accent);color:#0d0e12;font-weight:700;display:grid;place-items:center;font-size:14px}
+code,kbd{font:13.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto}
+pre code{background:none;border:0;padding:0}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.04em}
+.ok{color:#5fd39a}.warn{color:#f0b65a}
+.note{border-left:3px solid var(--accent);background:var(--panel);padding:12px 16px;border-radius:0 10px 10px 0;color:var(--dim);max-width:760px}
+footer{padding:36px 0 60px;color:var(--dim);font-size:14px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="#"><img src="media/icon.png" alt="">Cinesnap</a>
+  <nav>
+    <a href="#start">Getting started</a><a href="#editing">Editing</a><a href="#export">Export</a>
+    <a href="#platforms">Platforms</a><a href="#cli">CLI</a><a href="#trouble">Troubleshooting</a>
+    <a href="https://github.com/aubergine-ux/cinesnap">GitHub</a>
+  </nav>
+</div></header>
+
+<div class="wrap hero">
+  <h1>Record your screen.<br><span>Get a polished demo.</span></h1>
+  <p>Cinesnap zooms in where you click, smooths your cursor and frames the result on a clean background — automatically, and all of it editable afterwards.</p>
+  <a class="btn primary" href="https://github.com/aubergine-ux/cinesnap/releases">Download</a>
+  <a class="btn ghost" href="#start">Read the guide</a>
+  <video class="shot" src="media/before-after.mp4" autoplay muted loop playsinline width="1120"></video>
+</div>
+
+<section id="start"><div class="wrap">
+  <h2>Getting started</h2>
+  <p class="lead">The defaults are chosen so that the first recording already looks good. There are three steps.</p>
+  <ol class="steps">
+    <li><b>Record.</b> Pick a screen or window, optionally a microphone and webcam, and press <b>Start recording</b>. The window gets out of the way. On Wayland the system asks which screen or window to share.</li>
+    <li><b>Stop.</b> Bring Cinesnap back and press <b>Stop</b>. The last moments, where you were reaching for the stop button, are trimmed for you (you can undo that).</li>
+    <li><b>Export.</b> The editor opens with zooms already placed on your clicks and typing. Press <b>Export</b> for an MP4 or a GIF.</li>
+  </ol>
+  <h3>ffmpeg</h3>
+  <p class="lead">Cinesnap uses ffmpeg for capture and encoding. If it is not installed, the start screen offers to download it into Cinesnap's own data folder; nothing is installed system-wide. To use a specific build, set <code>CINESNAP_FFMPEG=/path/to/ffmpeg</code>.</p>
+</div></section>
+
+<section id="editing"><div class="wrap">
+  <h2>Editing</h2>
+  <p class="lead">A recording is never modified. Zooms, cuts, cursor and framing are settings applied on top of it, so everything can be changed or undone at any time.</p>
+  <div class="grid">
+    <div class="card"><h3>Zoom segments</h3><p>Blocks on the zoom track. Drag to move, drag an edge to resize, double-click empty track to add one, <kbd>Delete</kbd> to remove. Each has its own zoom level, ease-in/out time and easing curve, and either follows the cursor or stays on a fixed point.</p></div>
+    <div class="card"><h3>Auto-zoom</h3><p>Generates a segment for each click and typing burst. Activity closer together than <i>Merge clicks within</i> shares one zoom that follows the cursor. Regenerating keeps every segment you edited or added by hand.</p></div>
+    <div class="card"><h3>Cuts and trims</h3><p>Drag the handles at either end of the cut track to trim. Press <kbd>S</kbd> at the start and again at the end of a section to cut it out, or switch on cut mode with <kbd>C</kbd> and drag across the timeline.</p></div>
+    <div class="card"><h3>Cursor</h3><p>The real cursor is not in the recording; a larger one is drawn from the event log. Adjust its size, how strongly its path is smoothed, click ripples, and whether it hides when idle. The cursor is always exactly on target at the moment of a click.</p></div>
+    <div class="card"><h3>Frame</h3><p>Padding, rounded corners and drop shadow, over a solid colour, a gradient, an image, or a blurred wallpaper. Aspect presets: 16:9, 9:16 for shorts, 1:1, 4:3, or the recording's own shape.</p></div>
+    <div class="card"><h3>Webcam</h3><p>If a webcam was recorded it appears as a circle or rounded square in a corner of your choice, and can be hidden without re-recording.</p></div>
+  </div>
+  <h3>Keyboard</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><kbd>Space</kbd></td><td>Play / pause</td></tr>
+    <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Step one frame</td></tr>
+    <tr><td><kbd>S</kbd></td><td>Mark cut start, then cut to the playhead</td></tr>
+    <tr><td><kbd>C</kbd></td><td>Toggle drag-to-cut mode</td></tr>
+    <tr><td><kbd>Delete</kbd></td><td>Remove the selected zoom or cut</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></td><td>Undo / redo</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+scroll</td><td>Zoom the timeline</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>Clear selection / leave cut mode</td></tr>
+  </table></div>
+</div></section>
+
+<section id="export"><div class="wrap">
+  <h2>Export</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Format</th><th>Presets</th><th>Notes</th></tr>
+    <tr><td>MP4 (H.264 + AAC)</td><td>4K, 1440p, 1080p, 720p · 30 or 60 fps · low / medium / high quality</td><td>Uses a hardware encoder when one works on your machine (NVENC, VideoToolbox, Quick Sync, AMF, VA-API), otherwise x264. Streamable (<code>faststart</code>).</td></tr>
+    <tr><td>GIF</td><td>README (800 px wide, 15 fps), Small (480 px, 12 fps)</td><td>Two passes: a palette is built from the whole clip, then only the rectangle that changed is written per frame. Keep GIFs short; use the cut tools.</td></tr>
+  </table></div>
+  <p class="note">Hardware encoders are tried with a real test encode at startup, because an encoder being compiled into ffmpeg says nothing about whether the GPU driver works. Set <code>CINESNAP_ENCODER=libx264</code> to force software encoding.</p>
+</div></section>
+
+<section id="platforms"><div class="wrap">
+  <h2>Platforms</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Platform</th><th>Capture</th><th>Cursor position</th><th>Clicks and typing</th></tr>
+    <tr><td>Windows 10/11</td><td>Desktop Duplication, GDI fallback</td><td class="ok">Exact</td><td class="ok">Exact</td></tr>
+    <tr><td>macOS 11+</td><td>AVFoundation</td><td class="ok">Exact</td><td class="ok">Exact (keyboard needs Accessibility permission)</td></tr>
+    <tr><td>Linux, X11</td><td>x11grab</td><td class="ok">Exact</td><td class="ok">Exact</td></tr>
+    <tr><td>Linux, Wayland<br>(KDE, GNOME)</td><td>ScreenCast portal + PipeWire</td><td class="ok">Exact, from stream metadata</td><td class="warn">Exact with <code>input</code> group access, otherwise estimated</td></tr>
+    <tr><td>Linux, Wayland<br>(portals without cursor metadata)</td><td>ScreenCast portal + PipeWire</td><td class="warn">Unknown; cursor stays baked into the video</td><td class="warn">Exact timing with <code>input</code> group access; zooms centre on the screen</td></tr>
+  </table></div>
+  <h3>Wayland, in detail</h3>
+  <p class="lead">Wayland does not let applications see the pointer or the keyboard outside their own windows. Cinesnap gets the cursor position from the screen-sharing stream itself, and button presses from the kernel input devices, which are readable by members of the <code>input</code> group:</p>
+  <pre><code>sudo usermod -aG input $USER   # then log out and back in</code></pre>
+  <p class="lead">Without that, clicks are estimated from where the cursor comes to rest, which works well for deliberate point-and-click demos and less well for fast work. Only the fact that a key or button went down is recorded, never which key. Taps on a touchpad are produced by the compositor and are only seen through estimation.</p>
+  <p class="lead">Playback in the editor uses the system's WebKitGTK and GStreamer; make sure the H.264 decoder is installed (<code>gst-libav</code> or <code>gstreamer1.0-libav</code>).</p>
+</div></section>
+
+<section id="cli"><div class="wrap">
+  <h2>Command line</h2>
+  <p class="lead">Recordings are plain folders (<code>*.cinesnap</code>) in <code>Videos/Cinesnap</code>. They can be rendered without the app, which is useful in scripts and CI.</p>
+  <pre><code># render with the settings saved in the project
+cinesnap-cli render "My demo.cinesnap" -o demo.mp4
+
+# a README-sized GIF, and a vertical cut for shorts
+cinesnap-cli render "My demo.cinesnap" -o demo.gif
+cinesnap-cli render "My demo.cinesnap" -o short.mp4 --aspect 9:16 --preset 1080p
+
+# record five seconds without opening the window
+cinesnap record out.cinesnap --seconds 5
+
+# which ffmpeg and encoder will be used
+cinesnap-cli doctor</code></pre>
+  <p class="lead">The bundle layout and the event log are documented in <a href="https://github.com/aubergine-ux/cinesnap/blob/main/docs/recording-format.md">recording-format.md</a>; the design is in <a href="https://github.com/aubergine-ux/cinesnap/blob/main/docs/architecture.md">architecture.md</a>.</p>
+</div></section>
+
+<section id="trouble"><div class="wrap">
+  <h2>Troubleshooting</h2>
+  <div class="grid">
+    <div class="card"><h3>No zooms were generated</h3><p>No clicks were seen. On Wayland, check the note on the start screen about the <code>input</code> group. You can always add zooms by double-clicking the zoom track.</p></div>
+    <div class="card"><h3>The cursor is small and jittery</h3><p>Your compositor's portal does not provide cursor metadata, so the system cursor was recorded into the video and cannot be redrawn. Zooms and framing still work.</p></div>
+    <div class="card"><h3>Preview is black on Linux</h3><p>Install the GStreamer H.264 decoder (<code>gst-libav</code>). Exports are unaffected because they do not go through the web view.</p></div>
+    <div class="card"><h3>Export fails with a hardware encoder</h3><p>Start Cinesnap with <code>CINESNAP_ENCODER=libx264</code>. For VA-API on a non-default GPU set <code>CINESNAP_VAAPI_DEVICE</code>.</p></div>
+    <div class="card"><h3>macOS records a black screen</h3><p>Grant Screen Recording permission to Cinesnap in System Settings → Privacy &amp; Security, then restart the app.</p></div>
+    <div class="card"><h3>A recorded window moved</h3><p>On Windows, macOS and X11 a window is recorded as the part of the screen it occupied when recording started. Keep it in place, or record the screen and crop.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">Cinesnap is free software under the MIT license. · <a href="https://github.com/aubergine-ux/cinesnap">Source on GitHub</a></div></footer>
+</body>
+</html>
