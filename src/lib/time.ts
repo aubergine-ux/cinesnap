@@ -101,10 +101,6 @@ export function setTrimEnd(cuts: Cut[], ms: number, durationMs: number): Cut[] {
 
 export const MIN_ZOOM_MS = 300;
 
-export function sortZooms(zooms: ZoomSegment[]): ZoomSegment[] {
-  return [...zooms].sort((a, b) => a.startMs - b.startMs);
-}
-
 /** Free range around a segment (or around a point when `id` is not in the list). */
 export function zoomBounds(zooms: ZoomSegment[], id: string | null, atMs: number, durationMs: number): { min: number; max: number } {
   let min = 0;

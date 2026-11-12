@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api, errorMessage, isTauri } from "./api";
-import { addCut, newZoomRange, normalizeCuts, srcToOut } from "./time";
+import { addCut, newZoomRange, normalizeCuts } from "./time";
 import type { Capabilities, MotionTracks, Project, RecentProject, Sources, ZoomSegment } from "./types";
 
 export type Selection = { kind: "zoom"; id: string } | { kind: "cut"; startMs: number } | null;
@@ -329,8 +329,3 @@ export const useStore = create<State>((set, get) => {
     togglePanel: () => set({ panelOpen: !get().panelOpen }),
   };
 });
-
-/** Output time (ms) of a source time for the current project. */
-export function sourceToOutput(project: Project, ms: number): number {
-  return srcToOut(ms, project.cuts, project.source.video.durationMs);
-}

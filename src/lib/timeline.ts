@@ -1,9 +1,5 @@
 // Timeline geometry: time <-> pixels, ruler ticks, zooming.
 
-export function msToPx(ms: number, pxPerMs: number): number {
-  return ms * pxPerMs;
-}
-
 export function pxToMs(px: number, pxPerMs: number): number {
   return pxPerMs > 0 ? px / pxPerMs : 0;
 }

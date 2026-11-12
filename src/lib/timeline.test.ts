@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { clampZoom, formatTime, msToPx, pxToMs, tickStep, ticks, zoomAround } from "./timeline";
+import { clampZoom, formatTime, pxToMs, tickStep, ticks, zoomAround } from "./timeline";
 
 describe("timeline geometry", () => {
   it("converts between time and pixels", () => {
-    expect(msToPx(2000, 0.1)).toBe(200);
     expect(pxToMs(200, 0.1)).toBe(2000);
     expect(pxToMs(200, 0)).toBe(0);
   });

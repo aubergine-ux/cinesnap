@@ -18,15 +18,6 @@ export function Section({ title, children, defaultOpen = true, right }: { title:
   );
 }
 
-export function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="row">
-      <span className="row-label">{label}</span>
-      <span className="row-control">{children}</span>
-    </label>
-  );
-}
-
 export function Slider({
   label,
   value,
