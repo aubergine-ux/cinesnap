@@ -191,7 +191,7 @@ pub fn export(
     for i in 0..tracks.frames {
         if cancel.load(Ordering::Relaxed) {
             writer.abort();
-            let _ = std::fs::remove_file(&part);
+            ffmpeg::remove_file_patiently(&part);
             return Err(Cancelled.into());
         }
         let out_ms = i as f64 * 1000.0 / fps;
@@ -261,7 +261,7 @@ pub fn export(
         )?;
     }
     if cancel.load(Ordering::Relaxed) {
-        let _ = std::fs::remove_file(&part);
+        ffmpeg::remove_file_patiently(&part);
         return Err(Cancelled.into());
     }
     std::fs::rename(&part, opts.out).with_context(|| format!("writing {}", opts.out.display()))?;

@@ -517,10 +517,34 @@ impl FrameWriter {
         Ok(())
     }
 
+    /// Stop encoding and wait until ffmpeg has let go of the output file.
+    ///
+    /// Closing stdin makes ffmpeg exit on its own, which matters when the
+    /// executable is a launcher shim (as with some Windows packages): killing
+    /// the shim would leave the real process running with the file open.
     pub fn abort(mut self) {
         drop(self.stdin.take());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Delete a file that another process may be about to release.
+pub fn remove_file_patiently(path: &Path) {
+    for _ in 0..50 {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                std::thread::sleep(std::time::Duration::from_millis(40))
+            }
+            _ => return,
+        }
     }
 }
 
