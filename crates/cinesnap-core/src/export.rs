@@ -176,6 +176,13 @@ impl Frames<'_> {
         let caption = caption_at(&tracks.captions, out_ms);
         let cursor = tracks.cursor_drawn[clip].then_some(CursorState { x, y, alpha, press });
         let comp = self.comp;
+        let blur = &self.project.motion_blur;
+        let (cams, trail) = match comp.layout(clip) {
+            Some(l) if blur.enabled => {
+                crate::motion::blur_samples(tracks, i, blur.strength, l.frame.width, l.view_w)
+            }
+            _ => (vec![], vec![]),
+        };
 
         let mut input = FrameInput {
             clip,
@@ -184,6 +191,8 @@ impl Frames<'_> {
             out_ms,
             src: &[],
             cam: tracks.cam_at(i),
+            blur: &cams,
+            trail: &trail,
             cursor,
             ripples: &ripples,
             webcam: None,
@@ -245,7 +254,21 @@ fn export_to(
     let preset = presets::resolve(&project.export.preset, &project.export.format);
 
     let logs = load_logs(dir, project);
-    let tracks = compute_motion(project, &logs);
+    // The preview uses the analysis once it is there; so must the export.
+    // It only refines zooms and reframing, so a recording it cannot read
+    // fails later, at decoding, with a clearer message.
+    let activity = match crate::activity::ensure(dir, project, opts.ffmpeg, cancel, &mut |f| {
+        progress(Progress {
+            stage: "analyse",
+            frame: (f * 100.0) as usize,
+            total: 100,
+        })
+    }) {
+        Ok(a) => a,
+        Err(e) if e.is::<Cancelled>() => return Err(e),
+        Err(_) => crate::activity::load(dir, project),
+    };
+    let tracks = compute_motion(project, &logs, &activity);
     if tracks.frames == 0 {
         bail!("nothing to export: the whole recording is cut");
     }

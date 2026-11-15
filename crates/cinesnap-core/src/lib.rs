@@ -5,6 +5,7 @@ pub mod activity;
 pub mod audio;
 pub mod cli;
 pub mod clips;
+pub mod device;
 pub mod events;
 pub mod export;
 pub mod ffmpeg;

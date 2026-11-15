@@ -15,7 +15,8 @@ use tiny_skia::{
     Path as SkPath, PathBuilder, Pixmap, PixmapMut, Point, Shader, SpreadMode, Stroke, Transform,
 };
 
-use crate::layout::{view_rect, Layout};
+use crate::device::{self, rounded_corners};
+use crate::layout::Layout;
 use crate::motion::KeyMark;
 use crate::project::{
     parse_color, Annotation, Background, CaptionStyle, Card, ClipBody, KeystrokeStyle, Project,
@@ -36,6 +37,27 @@ pub const ARROW: [(f32, f32); 7] = [
 ];
 
 pub const RIPPLE_MS: f64 = 500.0;
+
+/// Opacity of each of `n` cursor copies drawn for motion blur.
+pub fn trail_alpha(n: usize) -> f64 {
+    if n <= 1 {
+        1.0
+    } else {
+        2.0 / (n as f64 + 1.0)
+    }
+}
+
+/// Load a cursor image as a premultiplied pixmap.
+fn load_cursor(path: &Path) -> Option<Pixmap> {
+    let img = image::open(path).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let mut pm = Pixmap::new(w, h)?;
+    for (dst, src) in pm.pixels_mut().iter_mut().zip(img.pixels()) {
+        let [r, g, b, a] = src.0;
+        *dst = tiny_skia::ColorU8::from_rgba(r, g, b, a).premultiply();
+    }
+    Some(pm)
+}
 /// Fade at the start and end of a keystroke label.
 pub const KEY_FADE_IN_MS: f64 = 90.0;
 pub const KEY_FADE_OUT_MS: f64 = 260.0;
@@ -83,7 +105,12 @@ pub struct FrameInput<'a> {
     pub src: &'a [u8],
     /// Camera: centre in full-source pixels and scale.
     pub cam: (f64, f64, f64),
+    /// Camera states across the shutter interval, for motion blur. Fewer
+    /// than two: no blur.
+    pub blur: &'a [(f64, f64, f64)],
     pub cursor: Option<CursorState>,
+    /// Cursor positions across the shutter interval (source pixels).
+    pub trail: &'a [(f64, f64)],
     pub ripples: &'a [RippleState],
     pub webcam: Option<WebcamFrame<'a>>,
     /// Shortcut to show, with its opacity.
@@ -101,7 +128,9 @@ impl<'a> FrameInput<'a> {
             out_ms: 0.0,
             src,
             cam,
+            blur: &[],
             cursor: None,
+            trail: &[],
             ripples: &[],
             webcam: None,
             key: None,
@@ -160,12 +189,23 @@ enum Stage {
     Card(CardStage),
 }
 
+/// How the cursor is drawn.
+struct Pointer {
+    style: String,
+    /// The custom cursor image, premultiplied, and its hotspot in pixels.
+    image: Option<(Pixmap, f32, f32)>,
+    highlight: String,
+    highlight_color: [u8; 4],
+    highlight_size: f64,
+}
+
 pub struct Compositor {
     width: u32,
     height: u32,
     /// Size unit: 1.0 at 1080p.
     s: f64,
     stages: Vec<Stage>,
+    pointer: Pointer,
     cursor_size: f64,
     ripple_color: [u8; 4],
     draw_ripples: bool,
@@ -379,21 +419,22 @@ impl Compositor {
                 ClipBody::Recording(r) => {
                     let layout = Layout::for_crop(project, r.crop);
                     let f = layout.frame;
-                    let key = format!("{:?}", (f.x, f.y, f.width, f.height, layout.radius));
+                    let key = format!("{:?}", (f, layout.radii, layout.body));
                     let (base, frame_mask) = framed
                         .entry(key)
                         .or_insert_with(|| {
                             let mut base = (*background(&project.frame.background)).clone();
-                            // Drop shadow under the frame.
+                            // Drop shadow under the frame (or the device around it).
                             if project.frame.shadow > 0.0 {
                                 let mut m = Mask::new(width, height).unwrap();
                                 let off = 16.0 * s;
+                                let b = layout.body;
                                 if let Some(path) = rounded_rect(
-                                    f.x as f32,
-                                    (f.y + off) as f32,
-                                    f.width as f32,
-                                    f.height as f32,
-                                    layout.radius as f32,
+                                    b.x as f32,
+                                    (b.y + off) as f32,
+                                    b.width as f32,
+                                    b.height as f32,
+                                    layout.body_radius as f32,
                                 ) {
                                     m.fill_path(
                                         &path,
@@ -412,13 +453,20 @@ impl Compositor {
                                     }
                                 }
                             }
+                            device::draw_body(
+                                &mut base,
+                                width,
+                                height,
+                                &layout,
+                                &project.frame.device,
+                            );
                             let mut mask = Mask::new(width, height).unwrap();
-                            if let Some(path) = rounded_rect(
+                            if let Some(path) = rounded_corners(
                                 f.x as f32,
                                 f.y as f32,
                                 f.width as f32,
                                 f.height as f32,
-                                layout.radius as f32,
+                                layout.radii.map(|r| r as f32),
                             ) {
                                 mask.fill_path(
                                     &path,
@@ -437,7 +485,9 @@ impl Compositor {
                         .filter(|z| z.start_ms >= span.start_ms - 0.5 && z.start_ms < span.end_ms())
                         .map(|z| z.scale)
                         .fold(1.0, f64::max);
-                    let src_w = even((f.width * max_scale).min(r.crop.width));
+                    // Source pixels the frame shows at zoom 1, times the zoom.
+                    let need = f.width * max_scale * r.crop.width / layout.view_w;
+                    let src_w = even(need.min(r.crop.width));
                     let src_h = even(src_w as f64 * r.crop.height / r.crop.width);
                     stages.push(Stage::Recording(RecStage {
                         layout,
@@ -466,11 +516,28 @@ impl Compositor {
             ((largest * short).round() as usize).clamp(2, short as usize)
         });
 
+        let c = &project.cursor;
+        let image = c
+            .image
+            .as_deref()
+            .filter(|_| c.style == "image")
+            .and_then(|p| load_cursor(&assets.join(p)))
+            .map(|img| {
+                let (w, h) = (img.width() as f32, img.height() as f32);
+                (img, c.hotspot_x as f32 * w, c.hotspot_y as f32 * h)
+            });
         Self {
             width,
             height,
             s,
             stages,
+            pointer: Pointer {
+                style: c.style.clone(),
+                image,
+                highlight: c.highlight.clone(),
+                highlight_color: parse_color(&c.highlight_color),
+                highlight_size: c.highlight_size,
+            },
             cursor_size: project.cursor.size,
             ripple_color: parse_color(&project.cursor.ripple_color),
             draw_ripples: project.cursor.ripples,
@@ -534,13 +601,18 @@ impl Compositor {
             Stage::Recording(st) => {
                 assert_eq!(input.src.len(), st.src_w * st.src_h * 4);
                 out.copy_from_slice(&st.base);
-                self.draw_video(st, out, input.src, input.cam);
+                if input.blur.len() >= 2 {
+                    self.draw_video_blurred(st, out, input.src, input.blur);
+                } else {
+                    self.draw_video(st, out, input.src, input.cam);
+                }
                 for a in &self.annotations {
                     let alpha = a.alpha(input.t_ms);
                     if alpha > 0.0 {
                         self.draw_annotation(st, out, a, alpha, input.cam);
                     }
                 }
+                device::draw_over(out, self.width, self.height, &st.layout);
                 self.draw_pointer(st, out, input);
             }
         }
@@ -606,10 +678,10 @@ impl Compositor {
 
     fn draw_pointer(&self, st: &RecStage, out: &mut [u8], input: &FrameInput) {
         let s = self.s * input.cam.2.sqrt();
-        let mut pm = PixmapMut::from_bytes(out, self.width, self.height).unwrap();
         let clip = Some(&*st.frame_mask);
 
         if self.draw_ripples {
+            let mut pm = PixmapMut::from_bytes(out, self.width, self.height).unwrap();
             for r in input.ripples {
                 let p = r.age_ms / RIPPLE_MS;
                 if !(0.0..1.0).contains(&p) {
@@ -628,48 +700,144 @@ impl Compositor {
             }
         }
 
-        if let Some(c) = input.cursor.filter(|c| c.alpha > 0.004) {
-            let (x, y) = map_point(st, input.cam, c.x, c.y);
-            let h = (26.0 * self.cursor_size * s * (1.0 - 0.15 * c.press)) as f32;
-            let mut pb = PathBuilder::new();
-            for (i, (px, py)) in ARROW.iter().enumerate() {
-                let (px, py) = (x as f32 + px * h, y as f32 + py * h);
-                if i == 0 {
-                    pb.move_to(px, py);
-                } else {
-                    pb.line_to(px, py);
-                }
-            }
-            pb.close();
-            if let Some(path) = pb.finish() {
-                let shadow = Transform::from_translate(0.0, 0.07 * h);
+        let Some(c) = input.cursor.filter(|c| c.alpha > 0.004) else {
+            return;
+        };
+        let (x, y) = map_point(st, input.cam, c.x, c.y);
+        let p = &self.pointer;
+        let r = (p.highlight_size * s) as f32;
+        if p.highlight == "spotlight" {
+            spotlight(out, self.width as usize, st, x, y, r as f64, 0.5 * c.alpha);
+        }
+        let mut pm = PixmapMut::from_bytes(out, self.width, self.height).unwrap();
+        if p.highlight == "ring" {
+            if let Some(path) = PathBuilder::from_circle(x as f32, y as f32, r) {
                 pm.fill_path(
                     &path,
-                    &solid([0, 0, 0, 255], 0.28 * c.alpha),
+                    &solid(p.highlight_color, 0.28 * c.alpha),
                     FillRule::Winding,
-                    shadow,
+                    Transform::identity(),
                     clip,
                 );
+                let stroke = Stroke {
+                    width: (3.0 * self.s) as f32,
+                    ..Default::default()
+                };
+                pm.stroke_path(
+                    &path,
+                    &solid(p.highlight_color, 0.9 * c.alpha),
+                    &stroke,
+                    Transform::identity(),
+                    clip,
+                );
+            }
+        }
+
+        let h = (26.0 * self.cursor_size * s * (1.0 - 0.15 * c.press)) as f32;
+        // Motion blur: copies along the path, each faint enough that they
+        // add up to roughly one cursor.
+        let trail: Vec<(f64, f64)> = if input.trail.len() >= 2 {
+            input
+                .trail
+                .iter()
+                .map(|&(tx, ty)| map_point(st, input.cam, tx, ty))
+                .collect()
+        } else {
+            vec![(x, y)]
+        };
+        let alpha = c.alpha * trail_alpha(trail.len());
+        for &(x, y) in &trail {
+            self.draw_cursor_at(&mut pm, clip, x as f32, y as f32, h, alpha);
+        }
+    }
+
+    fn draw_cursor_at(
+        &self,
+        pm: &mut PixmapMut,
+        clip: Option<&Mask>,
+        x: f32,
+        y: f32,
+        h: f32,
+        alpha: f64,
+    ) {
+        let p = &self.pointer;
+        if let Some((img, hx, hy)) = &p.image {
+            let k = h / img.height() as f32;
+            let paint = tiny_skia::PixmapPaint {
+                opacity: alpha as f32,
+                quality: tiny_skia::FilterQuality::Bicubic,
+                ..Default::default()
+            };
+            let t = Transform::from_row(k, 0.0, 0.0, k, x - hx * k, y - hy * k);
+            pm.draw_pixmap(0, 0, img.as_ref(), &paint, t, clip);
+            return;
+        }
+        if p.style == "dot" {
+            if let Some(path) = PathBuilder::from_circle(x, y, 0.3 * h) {
                 pm.fill_path(
                     &path,
-                    &solid([0, 0, 0, 255], c.alpha),
+                    &solid([0, 0, 0, 255], 0.55 * alpha),
                     FillRule::Winding,
                     Transform::identity(),
                     clip,
                 );
                 let stroke = Stroke {
                     width: 0.07 * h,
-                    line_join: LineJoin::Round,
                     ..Default::default()
                 };
                 pm.stroke_path(
                     &path,
-                    &solid([255, 255, 255, 255], c.alpha),
+                    &solid([255, 255, 255, 255], 0.9 * alpha),
                     &stroke,
                     Transform::identity(),
                     clip,
                 );
             }
+            return;
+        }
+        let (fill_c, line_c) = if p.style == "light" {
+            ([255, 255, 255, 255], [0, 0, 0, 255])
+        } else {
+            ([0, 0, 0, 255], [255, 255, 255, 255])
+        };
+        let mut pb = PathBuilder::new();
+        for (i, (px, py)) in ARROW.iter().enumerate() {
+            let (px, py) = (x + px * h, y + py * h);
+            if i == 0 {
+                pb.move_to(px, py);
+            } else {
+                pb.line_to(px, py);
+            }
+        }
+        pb.close();
+        if let Some(path) = pb.finish() {
+            let shadow = Transform::from_translate(0.0, 0.07 * h);
+            pm.fill_path(
+                &path,
+                &solid([0, 0, 0, 255], 0.28 * alpha),
+                FillRule::Winding,
+                shadow,
+                clip,
+            );
+            pm.fill_path(
+                &path,
+                &solid(fill_c, alpha),
+                FillRule::Winding,
+                Transform::identity(),
+                clip,
+            );
+            let stroke = Stroke {
+                width: 0.07 * h,
+                line_join: LineJoin::Round,
+                ..Default::default()
+            };
+            pm.stroke_path(
+                &path,
+                &solid(line_c, alpha),
+                &stroke,
+                Transform::identity(),
+                clip,
+            );
         }
     }
 
@@ -682,7 +850,7 @@ impl Compositor {
         cam: (f64, f64, f64),
     ) {
         let unit = self.s * cam.2.sqrt();
-        let v = view_rect(st.crop, cam.0, cam.1, cam.2);
+        let v = st.layout.view(cam.0, cam.1, cam.2);
         // Output pixels per source pixel.
         let k = st.layout.frame.width / v.width;
         let clip = Some(&*st.frame_mask);
@@ -1239,7 +1407,7 @@ impl Compositor {
         if x1 <= x0 || y1 <= y0 {
             return;
         }
-        let v = view_rect(st.crop, cam.0, cam.1, cam.2);
+        let v = st.layout.view(cam.0, cam.1, cam.2);
         // Decoded-source pixels per output pixel.
         let kx = st.src_w as f64 / st.crop.width;
         let ky = st.src_h as f64 / st.crop.height;
@@ -1305,10 +1473,75 @@ impl Compositor {
                 }
             });
     }
+
+    /// The recording averaged over the camera states across the shutter.
+    fn draw_video_blurred(
+        &self,
+        st: &RecStage,
+        out: &mut [u8],
+        src: &[u8],
+        cams: &[(f64, f64, f64)],
+    ) {
+        let w = self.width as usize;
+        let f = st.layout.frame;
+        let y0 = (f.y.floor().max(0.0)) as usize;
+        let y1 = ((f.y + f.height).ceil() as usize).min(self.height as usize);
+        if y1 <= y0 {
+            return;
+        }
+        let rows = y0 * w * 4..y1 * w * 4;
+        let base = out[rows.clone()].to_vec();
+        let mut acc = vec![0u32; base.len()];
+        let mut tmp = out.to_vec();
+        for &cam in cams {
+            tmp[rows.clone()].copy_from_slice(&base);
+            self.draw_video(st, &mut tmp, src, cam);
+            acc.par_iter_mut()
+                .zip(tmp[rows.clone()].par_iter())
+                .for_each(|(a, &b)| *a += b as u32);
+        }
+        let n = cams.len() as u32;
+        out[rows]
+            .par_iter_mut()
+            .zip(acc.par_iter())
+            .for_each(|(o, &a)| *o = ((a + n / 2) / n) as u8);
+    }
+}
+
+/// Darken the recording outside a circle (one-pixel soft edge), within the
+/// rounded frame.
+fn spotlight(out: &mut [u8], w: usize, st: &RecStage, cx: f64, cy: f64, r: f64, dim: f64) {
+    let f = st.layout.frame;
+    let y0 = f.y.floor().max(0.0) as usize;
+    let y1 = ((f.y + f.height).ceil() as usize).min(out.len() / (w * 4));
+    let x0 = f.x.floor().max(0.0) as usize;
+    let x1 = ((f.x + f.width).ceil() as usize).min(w);
+    let mask = st.frame_mask.data();
+    out.par_chunks_exact_mut(w * 4)
+        .enumerate()
+        .skip(y0)
+        .take(y1.saturating_sub(y0))
+        .for_each(|(y, line)| {
+            let dy = y as f64 + 0.5 - cy;
+            for x in x0..x1 {
+                let m = mask[y * w + x] as f64 / 255.0;
+                if m == 0.0 {
+                    continue;
+                }
+                let d = (x as f64 + 0.5 - cx).hypot(dy);
+                let outside = (d - r + 0.5).clamp(0.0, 1.0);
+                let k = 1.0 - dim * outside * m;
+                if k < 1.0 {
+                    for c in &mut line[x * 4..x * 4 + 3] {
+                        *c = (*c as f64 * k) as u8;
+                    }
+                }
+            }
+        });
 }
 
 fn map_point(st: &RecStage, cam: (f64, f64, f64), x: f64, y: f64) -> (f64, f64) {
-    let v = view_rect(st.crop, cam.0, cam.1, cam.2);
+    let v = st.layout.view(cam.0, cam.1, cam.2);
     let f = st.layout.frame;
     (
         f.x + (x - v.x) / v.width * f.width,

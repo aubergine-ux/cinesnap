@@ -4,12 +4,14 @@
 pub mod autozoom;
 pub mod camera;
 pub mod cursor;
+pub mod reframe;
 pub mod timeline;
 
 use std::path::Path;
 
 use serde::Serialize;
 
+use crate::activity::Activity;
 use crate::events::{EventKind, EventLog};
 use crate::project::{ClipBody, Project, TransitionKind, Zoom};
 use crate::transcript::{caption_lines, CaptionLine};
@@ -114,6 +116,87 @@ impl MotionTracks {
     }
 }
 
+/// Camera states and cursor positions across a shutter interval.
+pub type BlurSamples = (Vec<(f64, f64, f64)>, Vec<(f64, f64)>);
+
+/// Output pixels of movement per extra motion blur sample.
+pub const BLUR_PX_PER_SAMPLE: f64 = 2.5;
+pub const BLUR_MAX_SAMPLES: usize = 12;
+
+/// Samples across the shutter of output frame `i`: camera states and
+/// cursor positions, each empty when it moves too little to blur.
+/// `frame_w` is the frame width in output pixels and `view_w` the source
+/// width shown at zoom 1.
+pub fn blur_samples(
+    tracks: &MotionTracks,
+    i: usize,
+    strength: f64,
+    frame_w: f64,
+    view_w: f64,
+) -> BlurSamples {
+    if strength <= 0.0 || tracks.frames < 2 || i >= tracks.frames {
+        return (vec![], vec![]);
+    }
+    let clip = tracks.clip[i];
+    // The frames of the same clip around `i`.
+    let (mut lo, mut hi) = (i, i);
+    while lo > 0 && tracks.clip[lo - 1] == clip && i - lo < 2 {
+        lo -= 1;
+    }
+    while hi + 1 < tracks.frames && tracks.clip[hi + 1] == clip && hi - i < 2 {
+        hi += 1;
+    }
+    let at = |f: f64, get: &dyn Fn(usize) -> Vec<f64>| -> Vec<f64> {
+        let f = f.clamp(lo as f64, hi as f64);
+        let (a, b) = (f.floor() as usize, (f.ceil() as usize).min(hi));
+        let t = f - a as f64;
+        get(a)
+            .iter()
+            .zip(get(b))
+            .map(|(x, y)| x + (y - x) * t)
+            .collect()
+    };
+    let cam = |j: usize| {
+        let (x, y, s) = tracks.cam_at(j);
+        vec![x, y, s]
+    };
+    let cur = |j: usize| {
+        let (x, y, _, _) = tracks.cursor_at(j);
+        vec![x, y]
+    };
+    let (f0, f1) = (i as f64 - strength / 2.0, i as f64 + strength / 2.0);
+    let samples = |n: usize, get: &dyn Fn(usize) -> Vec<f64>| -> Vec<Vec<f64>> {
+        (0..n)
+            .map(|k| at(f0 + (f1 - f0) * (k as f64 + 0.5) / n as f64, get))
+            .collect()
+    };
+    let count = |d: f64| ((d / BLUR_PX_PER_SAMPLE).ceil() as usize).min(BLUR_MAX_SAMPLES);
+
+    let (a, b) = (at(f0, &cam), at(f1, &cam));
+    let px_per_src = |s: f64| frame_w * s.max(1.0) / view_w;
+    let k = px_per_src(a[2].max(b[2]));
+    let pan = (a[0] - b[0]).abs().max((a[1] - b[1]).abs()) * k;
+    let zoom = (a[2] - b[2]).abs() / a[2].max(b[2]) * frame_w / 2.0;
+    let n = count(pan.max(zoom));
+    let cams = if n >= 2 {
+        samples(n, &cam)
+            .into_iter()
+            .map(|v| (v[0], v[1], v[2]))
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let (a, b) = (at(f0, &cur), at(f1, &cur));
+    let n = count((a[0] - b[0]).hypot(a[1] - b[1]) * k / 1.6);
+    let trail = if n >= 2 {
+        samples(n, &cur).into_iter().map(|v| (v[0], v[1])).collect()
+    } else {
+        vec![]
+    };
+    (cams, trail)
+}
+
 /// The event log of every clip, in clip order (empty for cards and for
 /// recordings whose log cannot be read).
 pub fn load_logs(dir: &Path, project: &Project) -> Vec<EventLog> {
@@ -134,14 +217,19 @@ pub fn load_logs(dir: &Path, project: &Project) -> Vec<EventLog> {
 
 /// Regenerate automatic zooms for every recording on the timeline. Manual
 /// segments are kept. Returns the full, sorted list in timeline time.
-pub fn auto_zoom(project: &Project, logs: &[EventLog]) -> Vec<Zoom> {
+/// `activity` (per clip, may be shorter) places typing zooms on the text.
+pub fn auto_zoom(project: &Project, logs: &[EventLog], activity: &[Option<Activity>]) -> Vec<Zoom> {
     let mut out = Vec::new();
     for span in project.spans() {
         let (Some(local), Some(log)) = (project.local(span), logs.get(span.index)) else {
             continue;
         };
         let id = &project.clips[span.index].id;
-        for mut z in autozoom::auto_zoom(&local, log) {
+        let act = activity
+            .get(span.index)
+            .and_then(Option::as_ref)
+            .filter(|_| project.auto_zoom.follow_text);
+        for mut z in autozoom::auto_zoom(&local, log, act) {
             z.start_ms += span.start_ms;
             z.end_ms += span.start_ms;
             if !z.manual && id != "main" {
@@ -193,7 +281,55 @@ pub fn webcam_state(project: &Project, ratio: f64, t: f64) -> (f64, f64, f64, f6
     (mix(fx, tx), mix(fy, ty), mix(fs, ts), mix(from.3, to.3))
 }
 
-pub fn compute_motion(project: &Project, logs: &[EventLog]) -> MotionTracks {
+/// What the camera follows: the cursor, except while typing, when it is
+/// wherever the typed text appears.
+pub fn follow_series(
+    cursor: &cursor::CursorPath,
+    log: &EventLog,
+    activity: Option<&Activity>,
+    duration_ms: f64,
+) -> camera::Follow {
+    let mut f = camera::Follow::cursor(cursor);
+    let Some(activity) = activity else {
+        return f;
+    };
+    let n = f.x.len();
+    let mut changed = false;
+    for burst in autozoom::typing_bursts(log) {
+        for (k, &t) in burst.iter().enumerate() {
+            let Some((x, y)) =
+                activity.local_change(t, t + autozoom::ECHO_MS, autozoom::TYPED_SHARE)
+            else {
+                continue;
+            };
+            let until = burst
+                .get(k + 1)
+                .copied()
+                .unwrap_or(t + 1200.0)
+                .min(duration_ms);
+            let i0 = (t / cursor::STEP_MS).max(0.0) as usize;
+            let i1 = ((until / cursor::STEP_MS) as usize).min(n.saturating_sub(1));
+            for i in i0..=i1.max(i0).min(n.saturating_sub(1)) {
+                f.x[i] = x;
+                f.y[i] = y;
+                f.keep_x[i] = x;
+                f.keep_y[i] = y;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        cursor::smooth_zero_phase(&mut f.x, 220.0);
+        cursor::smooth_zero_phase(&mut f.y, 220.0);
+    }
+    f
+}
+
+pub fn compute_motion(
+    project: &Project,
+    logs: &[EventLog],
+    activity: &[Option<Activity>],
+) -> MotionTracks {
     let duration = project.duration_ms();
     let fps = crate::layout::output_fps(project);
     let kept = Kept::new(duration, &project.cuts);
@@ -215,7 +351,35 @@ pub fn compute_motion(project: &Project, logs: &[EventLog]) -> MotionTracks {
                 project.cursor.smoothing,
                 project.cursor.hide_when_idle_ms,
             );
-            let camera = camera::camera_path(&local.zooms, &cursor, local.crop, span.duration_ms);
+            let act = activity.get(span.index).and_then(Option::as_ref);
+            let text = act.filter(|_| project.auto_zoom.follow_text);
+            let follow = follow_series(&cursor, log, text, span.duration_ms);
+            let layout = crate::layout::Layout::for_crop(project, local.crop);
+            let reframed =
+                layout.view_w < local.crop.width - 0.5 || layout.view_h < local.crop.height - 0.5;
+            let (rx, ry) = if reframed {
+                reframe::rest_path(
+                    &reframe::Reframing {
+                        crop: local.crop,
+                        width: layout.view_w,
+                        height: layout.view_h,
+                        follow: (&follow.x, &follow.y),
+                        activity: act,
+                        segments: &local.reframe.segments,
+                    },
+                    span.duration_ms,
+                )
+            } else {
+                (vec![], vec![])
+            };
+            let view = camera::View {
+                crop: local.crop,
+                width: layout.view_w,
+                height: layout.view_h,
+                rest_x: &rx,
+                rest_y: &ry,
+            };
+            let camera = camera::camera_path(&local.zooms, &follow, &view, span.duration_ms);
             Some((cursor, camera))
         })
         .collect();
@@ -361,6 +525,62 @@ pub fn compute_motion(project: &Project, logs: &[EventLog]) -> MotionTracks {
 
 #[cfg(test)]
 mod tests {
+
+    fn tracks(
+        cam_x: impl Fn(usize) -> f32,
+        cur_x: impl Fn(usize) -> f32,
+        clips: &[u16],
+    ) -> MotionTracks {
+        let n = clips.len();
+        MotionTracks {
+            fps: 60,
+            frames: n,
+            duration_ms: n as f64 * 1000.0 / 60.0,
+            src_ms: (0..n).map(|i| i as f64 * 1000.0 / 60.0).collect(),
+            clip: clips.to_vec(),
+            clip_starts: vec![0.0],
+            cam: (0..n).flat_map(|i| [cam_x(i), 540.0, 2.0]).collect(),
+            cursor: (0..n).flat_map(|i| [cur_x(i), 500.0, 1.0, 0.0]).collect(),
+            webcam: vec![0.0; n * 4],
+            ripples: vec![],
+            events: EventMarks::default(),
+            keys: vec![],
+            captions: vec![],
+            transitions: vec![],
+            cursor_drawn: vec![true],
+            cursor_mode: "metadata".into(),
+        }
+    }
+
+    // The same cases as `blurSamples` in src/render/renderer.ts.
+    #[test]
+    fn blur_leaves_still_frames_alone() {
+        let t = tracks(|_| 960.0, |_| 400.0, &[0; 10]);
+        let (cams, trail) = blur_samples(&t, 5, 0.5, 1920.0, 1920.0);
+        assert!(cams.is_empty() && trail.is_empty());
+    }
+
+    #[test]
+    fn blur_takes_more_samples_the_further_things_move() {
+        let t = tracks(|i| 900.0 + 40.0 * i as f32, |_| 400.0, &[0; 10]);
+        let (cams, _) = blur_samples(&t, 5, 0.5, 1920.0, 1920.0);
+        assert_eq!(cams.len(), BLUR_MAX_SAMPLES);
+        assert!((cams[0].0 - (900.0 + 40.0 * (4.75 + 0.5 / 24.0))).abs() < 1e-3);
+        let t = tracks(|i| 900.0 + 6.0 * i as f32, |_| 400.0, &[0; 10]);
+        assert_eq!(blur_samples(&t, 5, 0.5, 1920.0, 1920.0).0.len(), 3);
+    }
+
+    #[test]
+    fn blur_stays_inside_the_clip() {
+        let t = tracks(
+            |_| 960.0,
+            |i| 100.0 + 30.0 * i as f32,
+            &[0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+        );
+        let (_, trail) = blur_samples(&t, 5, 1.0, 1920.0, 1920.0);
+        assert!(trail.iter().all(|&(x, _)| x >= 100.0 + 30.0 * 5.0 - 1e-3));
+    }
+
     use super::*;
     use crate::events::{Button, Event, Header};
     use crate::project::Cut;
@@ -408,8 +628,8 @@ mod tests {
             ],
         };
         let logs = [log];
-        p.zooms = auto_zoom(&p, &logs);
-        let m = compute_motion(&p, &logs);
+        p.zooms = auto_zoom(&p, &logs, &[]);
+        let m = compute_motion(&p, &logs, &[]);
         assert_eq!(m.frames, 210);
         assert_eq!(m.duration_ms, 7000.0);
         assert_eq!(m.src_ms[0], 2000.0);

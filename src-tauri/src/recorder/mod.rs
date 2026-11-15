@@ -440,7 +440,7 @@ fn assemble(
         .collect();
     project.sanitize();
     let logs: Vec<_> = parts.iter().map(|p| p.log.clone()).collect();
-    project.zooms = auto_zoom(&project, &logs);
+    project.zooms = auto_zoom(&project, &logs, &[]);
     project
 }
 

@@ -62,6 +62,11 @@ pub struct Project {
     /// Moments flagged while recording or editing, in timeline time.
     #[serde(default)]
     pub markers: Vec<Marker>,
+    #[serde(default)]
+    pub reframe: Reframe,
+    /// Off unless set, so projects from before it existed look the same.
+    #[serde(default)]
+    pub motion_blur: MotionBlur,
     /// Fields written by newer versions; preserved on save.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -205,6 +210,9 @@ pub struct AutoZoom {
     pub scale: f64,
     pub merge_gap_ms: f64,
     pub on_typing: bool,
+    /// Typing zooms and the camera go to where the text appears on screen.
+    /// Off unless set, so projects from before it existed look the same.
+    pub follow_text: bool,
 }
 
 impl Default for AutoZoom {
@@ -214,6 +222,7 @@ impl Default for AutoZoom {
             scale: 2.0,
             merge_gap_ms: 2500.0,
             on_typing: true,
+            follow_text: false,
         }
     }
 }
@@ -227,7 +236,19 @@ pub struct CursorStyle {
     pub ripples: bool,
     pub ripple_color: String,
     pub hide_when_idle_ms: f64,
+    /// `arrow` (dark), `light`, `dot`, or `image` (`image` is a file).
     pub style: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Hotspot of the image, as fractions of its size.
+    pub hotspot_x: f64,
+    pub hotspot_y: f64,
+    /// `none`, `ring` (a circle around the cursor) or `spotlight` (the rest
+    /// of the recording dimmed).
+    pub highlight: String,
+    pub highlight_color: String,
+    /// Radius of the ring or spotlight in px at 1080p.
+    pub highlight_size: f64,
 }
 
 impl Default for CursorStyle {
@@ -240,6 +261,12 @@ impl Default for CursorStyle {
             ripple_color: "#ffffff".into(),
             hide_when_idle_ms: 0.0,
             style: "arrow".into(),
+            image: None,
+            hotspot_x: 0.0,
+            hotspot_y: 0.0,
+            highlight: "none".into(),
+            highlight_color: "#ffd84a".into(),
+            highlight_size: 34.0,
         }
     }
 }
@@ -281,6 +308,58 @@ pub struct Frame {
     pub radius: f64,
     pub shadow: f64,
     pub background: Background,
+    pub device: Device,
+}
+
+/// What the recording is shown in.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Device {
+    /// `none`, `browser`, `macos`, `windows`, `laptop` or `phone`.
+    pub kind: String,
+    /// The address in a browser, the title of a window.
+    pub title: String,
+    pub dark: bool,
+}
+
+impl Default for Device {
+    fn default() -> Self {
+        Self {
+            kind: "none".into(),
+            title: String::new(),
+            dark: true,
+        }
+    }
+}
+
+/// Fill a frame of another shape (a vertical video of a wide recording)
+/// with a window that follows the action.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Reframe {
+    pub enabled: bool,
+    /// Stretches where the window is placed by hand, in timeline time.
+    pub segments: Vec<ReframeSegment>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReframeSegment {
+    pub id: String,
+    pub start_ms: f64,
+    pub end_ms: f64,
+    /// Centre of the window, in source pixels of the clip.
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Blur along the motion of the camera and the cursor.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MotionBlur {
+    pub enabled: bool,
+    /// Fraction of the frame interval the shutter is open (0.5 = 180°).
+    pub strength: f64,
 }
 
 impl Default for Frame {
@@ -295,6 +374,7 @@ impl Default for Frame {
                 to: "#e44d8a".into(),
                 angle: 135.0,
             },
+            device: Device::default(),
         }
     }
 }
@@ -842,7 +922,10 @@ impl Project {
             crop,
             cuts: vec![],
             zooms: vec![],
-            auto_zoom: AutoZoom::default(),
+            auto_zoom: AutoZoom {
+                follow_text: true,
+                ..Default::default()
+            },
             cursor: CursorStyle::default(),
             frame: Frame::default(),
             webcam: WebcamStyle::default(),
@@ -856,6 +939,11 @@ impl Project {
             transcript: None,
             audio: AudioSettings::default(),
             markers: vec![],
+            reframe: Reframe::default(),
+            motion_blur: MotionBlur {
+                enabled: true,
+                strength: 0.5,
+            },
             extra: Map::new(),
         };
         project.ensure_clips();
@@ -954,6 +1042,21 @@ impl Project {
                 ..z.clone()
             })
             .collect();
+        p.reframe = Reframe {
+            enabled: self.reframe.enabled,
+            segments: self
+                .reframe
+                .segments
+                .iter()
+                .filter(|r| r.start_ms >= a - 0.5 && r.start_ms < b)
+                .map(|r| ReframeSegment {
+                    start_ms: (r.start_ms - a).max(0.0),
+                    end_ms: (r.end_ms - a).min(span.duration_ms),
+                    ..r.clone()
+                })
+                .collect(),
+        };
+        p.motion_blur = self.motion_blur.clone();
         p.auto_zoom = self.auto_zoom.clone();
         p.cursor = self.cursor.clone();
         p.frame = self.frame.clone();
@@ -1187,6 +1290,17 @@ impl Project {
         self.frame.shadow = self.frame.shadow.clamp(0.0, 1.0);
         self.frame.radius = self.frame.radius.clamp(0.0, 200.0);
         self.cursor.size = self.cursor.size.clamp(0.2, 6.0);
+        self.cursor.hotspot_x = self.cursor.hotspot_x.clamp(0.0, 1.0);
+        self.cursor.hotspot_y = self.cursor.hotspot_y.clamp(0.0, 1.0);
+        self.cursor.highlight_size = self.cursor.highlight_size.clamp(8.0, 300.0);
+        self.motion_blur.strength = self.motion_blur.strength.clamp(0.0, 1.0);
+        for r in &mut self.reframe.segments {
+            r.start_ms = r.start_ms.clamp(0.0, dur);
+            r.end_ms = r.end_ms.clamp(r.start_ms, dur);
+        }
+        self.reframe
+            .segments
+            .sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
         self.cursor.smoothing = self.cursor.smoothing.clamp(0.0, 1.0);
         self.export.fps = self.export.fps.clamp(1, 120);
     }

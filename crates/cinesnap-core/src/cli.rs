@@ -269,7 +269,11 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
         }
         Cmd::Autozoom { project: dir } => {
             let mut project = Project::load(&dir)?;
-            project.zooms = auto_zoom(&project, &load_logs(&dir, &project));
+            project.zooms = auto_zoom(
+                &project,
+                &load_logs(&dir, &project),
+                &crate::activity::load(&dir, &project),
+            );
             project.save(&dir)?;
             println!("{} zoom segments", project.zooms.len());
         }
