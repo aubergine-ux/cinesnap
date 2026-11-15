@@ -119,9 +119,41 @@ runs a `showinfo` filter; the moment its first log line appears is taken as
 that track's first sample, which is how tracks started by different processes
 are aligned without a shared clock inside the files.
 
-While recording, the app window minimises itself. When it comes back to the
-front (to press Stop), that moment is remembered and the tail of the recording
-after it is cut by default — as an ordinary, undoable cut.
+**System sound** is its own track, so it can be turned down or muted without
+touching the voice. Linux records a PulseAudio/PipeWire monitor with ffmpeg;
+Windows (WASAPI loopback) and macOS 14.6+ (Core Audio taps) go through
+`cpal`. **One app's sound** comes from its own PipeWire stream on Linux and
+from process loopback on Windows 10 2004+. Loopback sources deliver nothing
+while nothing plays, so they are written through a gap-filling writer
+(`recorder/tape.rs`) that inserts the silence from the capture instants.
+
+**Variable frame rate.** With "skip unchanged frames" on, `mpdecimate` drops
+frames identical to the one before, keeping at least four a second. It runs
+after the conversion to the encoder's pixel format, which happens anyway, so
+it costs about 0.1 ms per 4K frame instead of the 3 ms it costs on packed RGB.
+
+**HDR screens** (Windows) are captured in 10 bit and converted with two 1D
+lookup tables and a matrix (`cinesnap_core::tonemap`): PQ to linear light at
+the screen's own SDR white level, BT.2020 to BT.709, linear to sRGB. SDR
+content comes out within one 8-bit step of an SDR capture; brighter
+highlights clip. It is about 2.5x cheaper than ffmpeg's `zscale`/`tonemap`
+chain and needs no optional ffmpeg libraries.
+
+**Sessions and segments.** A recording session is made of segments. Pausing
+stops every capture process, so nothing is recorded while paused; resuming
+starts a new segment (on Wayland the PipeWire stream stays open, so the
+picker does not come back). Switching screens starts the new segment before
+stopping the old one and cuts the overlap. When stopped, the segments become
+clips joined by plain cuts, and the countdown, the switch overlaps and the
+reach for the stop button become ordinary, undoable cuts.
+
+**Control bar and hotkeys.** A small always-on-top window shows the time
+and the controls. Windows (`WDA_EXCLUDEFROMCAPTURE`) and macOS (sharing type
+none) leave it out of the recording; Linux cannot, so the bar goes to a
+screen that is not being recorded, or is shown only for the countdown.
+Global hotkeys (start/stop, pause, marker) use the global-shortcut plugin,
+and the GlobalShortcuts portal on Wayland, where the desktop owns the keys.
+Cinesnap's own hotkeys are left out of the keystroke overlay.
 
 Video, audio, webcam and input are recorded as independent tracks into a
 project bundle (see [recording-format.md](recording-format.md)). The video is

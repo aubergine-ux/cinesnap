@@ -6,13 +6,16 @@ A recording is a directory with the extension `.cinesnap`:
 my-demo.cinesnap/
 ├── project.json     manifest + edit state (the only file the editor rewrites)
 ├── events.jsonl     input event log (append-only while recording)
-├── video.mp4        screen, cursor hidden, constant frame rate
+├── video.mp4        screen, cursor hidden
 ├── mic.wav          optional microphone track
+├── system.wav       optional system (or single-app) sound
 ├── webcam.mp4       optional webcam track
 ├── cursors/         optional cursor bitmaps captured during recording
 │   └── 3.png
-├── clips/           recordings added to the project later, one folder each
-│   └── clip1/       (same files as above: video.mp4, events.jsonl, …)
+├── clips/           more recordings on the timeline, one folder each:
+│   ├── part2/       the part after a pause or a screen switch
+│   └── clip1/       a recording added in the editor
+│                    (same files as above: video.mp4, events.jsonl, …)
 ├── project.json.bak the manifest as it was before the last save
 └── cache/           derived files: cleaned-up voice, music, preview mix
 ```
@@ -89,18 +92,21 @@ non-decreasing `t`. A truncated last line (crash during recording) is skipped.
 ```jsonc
 {
   "format": "cinesnap-project",
-  "version": 2,
+  "version": 3,
   "createdAt": "2026-11-12T03:55:00Z",
   "app": "0.2.0",
 
   // What was recorded. Never changes after recording.
   "source": {
-    "video":  { "file": "video.mp4", "width": 2560, "height": 1440, "fps": 60, "durationMs": 48211.0 },
+    "video":  { "file": "video.mp4", "width": 2560, "height": 1440, "fps": 60, "durationMs": 48211.0,
+                "vfr": true,                                   // optional: unchanged frames dropped
+                "hdr": "tonemapped" },                         // optional: HDR screen converted to SDR
     "mic":    { "file": "mic.wav", "offsetMs": -35.0 },        // optional
+    "system": { "file": "system.wav", "offsetMs": 12.0, "app": "Firefox" },  // optional; app only when limited to one
     "webcam": { "file": "webcam.mp4", "offsetMs": 120.0, "width": 1280, "height": 720 }, // optional
     "events": { "file": "events.jsonl" },
     "platform": "linux-wayland",
-    "target": "screen"                                         // screen | window | region
+    "target": "screen"                                         // screen | window | region | screens
   },
 
   // Everything below is edit state.
@@ -177,19 +183,37 @@ non-decreasing `t`. A truncated last line (crash during recording) is skipped.
                 "highlight": "#ffd84a", "background": "#000000a6", "maxChars": 36, "uppercase": false },
   "transcript": { "language": "en", "words": [ { "t0": 560, "t1": 820, "text": "And" } ] },
 
+  // Flagged moments: the marker hotkey while recording, or M in the editor.
+  "markers": [ { "id": "m1", "atMs": 4200, "label": "Install" } ],
+
   "audio": {
-    "micVolume": 1.0, "denoise": 0.5, "normalize": true,
+    "micVolume": 1.0, "micMute": false, "systemVolume": 0.8, "systemMute": false,
+    "denoise": 0.5, "normalize": true,
     "eq": { "enabled": true, "lowCutHz": 80, "bassDb": 0, "presenceDb": 3, "airDb": 1.5 },
     "music": { "source": "builtin:open-sky", "volume": 0.35, "duck": true, "duckDb": -14, "fadeInMs": 800, "fadeOutMs": 2500 }
   }
 }
 ```
 
+## Video timing
+
+`video.mp4` is H.264 with a keyframe every second. With `vfr`, frames that
+are identical to the one before were left out while recording (at least
+four a second are kept), so an idle screen costs almost nothing; `fps` is
+then the highest rate. Readers that need a constant rate resample (the
+exporter decodes through ffmpeg's `fps` filter).
+
 ## Clips
 
 `clips` is the timeline: recordings and cards, in order. A version 1 manifest
 has no `clips`; readers treat it as a single recording clip made from the
-top-level `source` and `crop` (which version 2 keeps for older builds).
+top-level `source` and `crop` (which later versions keep for older builds).
+
+A recording that was paused, or switched to another screen, is several
+clips joined with `cut` transitions: `main`, then `part2`, `part3`… in
+`clips/partN/`. Nothing is captured while paused. On a screen switch the
+next part starts before the previous one stops, and the overlap is an
+ordinary cut, as are the countdown and the reach for the stop button.
 
 **Timeline time** is the position in the clips laid end to end, each at its
 full length. `cuts`, `zooms`, `annotations`, `webcamKeys` and the transcript
@@ -210,3 +234,21 @@ and a file-size limit.
 The mapping from timeline time to output time (after cuts) is derived, so
 cutting a section never invalidates zoom segments, annotations or captions.
 Unknown fields are preserved on save so newer projects survive older builds.
+
+## Versions and migrations
+
+`version` is bumped whenever the meaning of the file changes. A reader
+upgrades older manifests step by step before using them
+(`crates/cinesnap-core/src/migrate.rs`) and never writes an older version.
+Steps only add or rewrite what they are about, and never change a value in
+a way an older build would misread.
+
+| Version | Written by | Change |
+| --- | --- | --- |
+| 1 | 0.1 | First format: one recording, edit state at the top level. |
+| 2 | 0.2 | `clips` (recordings and cards), annotations, webcam keyframes, captions, transcript, audio. |
+| 3 | 0.3 | `markers`; `source.system`; `micMute`, `systemVolume`, `systemMute`; `video.vfr` and `video.hdr`; recordings split into parts at pauses. |
+
+Manifests written by each release are kept as test fixtures
+(`crates/cinesnap-core/tests/fixtures/v*-project.json`) and must keep
+loading.
