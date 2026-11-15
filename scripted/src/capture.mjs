@@ -147,10 +147,11 @@ export async function encode(capture, durationMs, fps, ffmpeg, out) {
   return { width, height, frames: count, durationMs: (count * 1000) / fps };
 }
 
-// Frames actually in the file, by demuxing it.
+// Frames actually in the file, by demuxing it. One framecrc line per packet;
+// the `frame=` stats field is missing for stream copies on ffmpeg 6.
 export async function countFrames(ffmpeg, file) {
-  const r = await run(ffmpeg, ['-v', 'error', '-stats', '-i', file, '-map', '0:v:0', '-c', 'copy', '-f', 'null', '-']);
-  const all = [...r.stderr.matchAll(/frame=\s*(\d+)/g)];
-  if (r.code !== 0 || all.length === 0) throw new Error(`could not read back ${file}\n${r.stderr.trim()}`);
-  return Number(all.at(-1)[1]);
+  const r = await run(ffmpeg, ['-v', 'error', '-i', file, '-map', '0:v:0', '-c', 'copy', '-f', 'framecrc', '-']);
+  const count = r.stdout.split('\n').filter((l) => l && !l.startsWith('#')).length;
+  if (r.code !== 0 || count === 0) throw new Error(`could not read back ${file}\n${r.stderr.trim()}`);
+  return count;
 }
