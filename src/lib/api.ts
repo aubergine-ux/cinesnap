@@ -78,6 +78,8 @@ export const api = {
   deleteProject: (path: string) => call<void>("delete_project", { path }),
   autoZoom: (path: string, project: Project) => call<ZoomSegment[]>("auto_zoom", { path, project }),
   computeMotion: (path: string, project: Project) => call<MotionTracks>("compute_motion", { path, project }),
+  /** Analyse recordings not analysed yet; true when there was something to do. */
+  analyzeProject: (path: string, project: Project) => call<boolean>("analyze_project", { path, project }),
   exportVideo: (path: string, project: Project, outPath: string) => call<void>("export_video", { path, project, outPath }),
   cancelExport: () => call<void>("cancel_export"),
   /** Save for the last time and drop the files of clips that were removed. */

@@ -70,6 +70,8 @@ export interface AutoZoomSettings {
   scale: number;
   mergeGapMs: number;
   onTyping: boolean;
+  /** Typing zooms and the camera go to where the text appears on screen. */
+  followText: boolean;
 }
 
 export interface CursorSettings {
@@ -79,7 +81,34 @@ export interface CursorSettings {
   ripples: boolean;
   rippleColor: string;
   hideWhenIdleMs: number;
+  /** `arrow`, `light`, `dot`, or `image` (the file in `image`). */
   style: string;
+  image?: string;
+  /** Hotspot of the image, as fractions of its size. */
+  hotspotX: number;
+  hotspotY: number;
+  highlight: "none" | "ring" | "spotlight";
+  highlightColor: string;
+  /** Radius of the ring or spotlight in px at 1080p. */
+  highlightSize: number;
+}
+
+export type DeviceKind = "none" | "browser" | "macos" | "windows" | "laptop" | "phone";
+
+export interface DeviceFrame {
+  kind: DeviceKind;
+  /** The address in a browser, the title of a window. */
+  title: string;
+  dark: boolean;
+}
+
+export interface ReframeSegment {
+  id: string;
+  startMs: number;
+  endMs: number;
+  /** Centre of the window, in source pixels of the clip. */
+  x: number;
+  y: number;
 }
 
 export type Background =
@@ -96,6 +125,7 @@ export interface FrameSettings {
   radius: number;
   shadow: number;
   background: Background;
+  device: DeviceFrame;
 }
 
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -284,6 +314,9 @@ export interface Project {
   audio: AudioSettings;
   /** Moments flagged while recording or editing, in timeline time. */
   markers: Marker[];
+  /** Fill another shape with a window that follows the action. */
+  reframe: { enabled: boolean; segments: ReframeSegment[] };
+  motionBlur: { enabled: boolean; strength: number };
   // Unknown fields are preserved on save.
   [extra: string]: unknown;
 }

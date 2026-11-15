@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import { api, errorMessage, isTauri } from "./api";
-import { BUILTIN_STYLES, appendImported, applyStyle, extractStyle, insertClip, moveClip, newAnnotation, newCard, newId, removeClip, restoreWords, shiftFrom, spanAt, spans, totalDuration, webcamStateAt, wordsCut } from "./edit";
-import { viewRect, type Box } from "./layout";
+import { BUILTIN_STYLES, appendImported, applyStyle, extractStyle, insertClip, mainCrop, moveClip, newAnnotation, newCard, newId, removeClip, restoreWords, shiftFrom, spanAt, spans, totalDuration, webcamStateAt, wordsCut } from "./edit";
+import { clipLayout, outputSize, viewOf, type Box } from "./layout";
 import { addCut, newZoomRange, normalizeCuts } from "./time";
-import type { Annotation, AnnotationType, AppSettings, Capabilities, Clip, Cut, JobProgress, Marker, MotionTracks, MusicTrack, Project, RecentProject, RecordingOptions, Sources, Speech, StylePreset, WebcamKey, ZoomSegment } from "./types";
+import type { Annotation, AnnotationType, AppSettings, Capabilities, Clip, Cut, JobProgress, Marker, MotionTracks, ReframeSegment, MusicTrack, Project, RecentProject, RecordingOptions, Sources, Speech, StylePreset, WebcamKey, ZoomSegment } from "./types";
 
 export type Selection =
   | { kind: "zoom"; id: string }
@@ -12,6 +12,7 @@ export type Selection =
   | { kind: "clip"; id: string }
   | { kind: "webcamKey"; id: string }
   | { kind: "marker"; id: string }
+  | { kind: "reframe"; id: string }
   | null;
 
 export type PanelTab = "style" | "video" | "audio" | "captions" | "export";
@@ -98,6 +99,11 @@ interface State {
   moveClip: (id: string, by: number) => void;
   addWebcamKey: () => void;
   editWebcamKey: (id: string, patch: Partial<WebcamKey>, key?: string) => void;
+  /** A manual reframe segment around `ms`, placed where the window is now. */
+  addReframeAt: (ms: number) => void;
+  editReframe: (id: string, patch: Partial<ReframeSegment>, key?: string) => void;
+  /** Find where things change on screen, then refine the automatic zooms. */
+  analyze: () => Promise<void>;
   /** A marker at the playhead. */
   addMarker: () => void;
   editMarker: (id: string, patch: Partial<Marker>, key?: string) => void;
@@ -377,6 +383,7 @@ export const useStore = create<State>((set, get) => {
         });
         scheduleMotion(true);
         scheduleAudio(true);
+        void get().analyze();
       } catch (e) {
         set({ error: errorMessage(e) });
       }
@@ -438,6 +445,7 @@ export const useStore = create<State>((set, get) => {
       else if (sel.kind === "annotation") get().update((p) => void (p.annotations = p.annotations.filter((a) => a.id !== sel.id)));
       else if (sel.kind === "webcamKey") get().update((p) => void (p.webcamKeys = p.webcamKeys.filter((k) => k.id !== sel.id)));
       else if (sel.kind === "marker") get().update((p) => void (p.markers = p.markers.filter((m) => m.id !== sel.id)));
+      else if (sel.kind === "reframe") get().update((p) => void (p.reframe.segments = p.reframe.segments.filter((r) => r.id !== sel.id)));
       else return get().removeClip(sel.id);
       set({ selection: null });
     },
@@ -552,8 +560,12 @@ export const useStore = create<State>((set, get) => {
       const clip = span && project.clips[span.index];
       if (!clip || clip.kind !== "recording") return null;
       const i = motion && motion.frames ? Math.min(frame, motion.frames - 1) : -1;
-      if (i < 0) return viewRect(clip.crop, clip.crop.x + clip.crop.width / 2, clip.crop.y + clip.crop.height / 2, 1);
-      return viewRect(clip.crop, motion!.cam[i * 3], motion!.cam[i * 3 + 1], motion!.cam[i * 3 + 2]);
+      // Only the output's shape matters for what is visible.
+      const out = outputSize(project.frame.aspect, mainCrop(project), project.export);
+      const layout = clipLayout(out.width, out.height, project, clip.crop);
+      const c = clip.crop;
+      if (i < 0) return viewOf(layout, c.x + c.width / 2, c.y + c.height / 2, 1);
+      return viewOf(layout, motion!.cam[i * 3], motion!.cam[i * 3 + 1], motion!.cam[i * 3 + 2]);
     },
 
     addAnnotation: (type) => {
@@ -679,6 +691,56 @@ export const useStore = create<State>((set, get) => {
         },
         { key: key ? `cam:${id}:${key}` : undefined },
       );
+    },
+
+    addReframeAt: (ms) => {
+      const { project } = get();
+      if (!project) return;
+      const range = newZoomRange(project.reframe.segments, ms, totalDuration(project), 3000);
+      const span = range && spanAt(project, range.startMs);
+      if (!range || !span || project.clips[span.index]?.kind !== "recording") return;
+      // Start from where the window is at that moment.
+      get().seekSource(range.startMs + (range.endMs - range.startMs) / 2);
+      const view = get().currentView();
+      if (!view) return;
+      const id = newId("r");
+      get().update((p) => {
+        p.reframe.segments.push({ id, ...range, x: view.x + view.w / 2, y: view.y + view.h / 2 });
+        p.reframe.segments.sort((a, b) => a.startMs - b.startMs);
+      });
+      set({ selection: { kind: "reframe", id } });
+    },
+
+    editReframe: (id, patch, key) => {
+      get().update(
+        (p) => {
+          const r = p.reframe.segments.find((x) => x.id === id);
+          if (r) Object.assign(r, patch);
+          p.reframe.segments.sort((a, b) => a.startMs - b.startMs);
+        },
+        { key: key ? `reframe:${id}:${key}` : undefined },
+      );
+    },
+
+    analyze: async () => {
+      const { project, projectPath } = get();
+      if (!project || !projectPath) return;
+      try {
+        const changed = await api.analyzeProject(projectPath, project);
+        // The project may have been closed or replaced in the meantime.
+        if (!changed || get().projectPath !== projectPath) return;
+        const current = get().project!;
+        // Typing zooms now know where the text is. Only touch zooms nobody
+        // has edited, and only if there are any.
+        if (current.autoZoom.enabled && current.autoZoom.followText && current.zooms.some((z) => !z.manual)) {
+          const zooms = await api.autoZoom(projectPath, current);
+          if (get().projectPath === projectPath) get().update((p) => void (p.zooms = zooms), { key: "zooms:analysed" });
+        } else {
+          scheduleMotion(true);
+        }
+      } catch (e) {
+        if (errorMessage(e) !== "cancelled") set({ error: `Could not analyse the recording: ${errorMessage(e)}` });
+      }
     },
 
     addMarker: () => {

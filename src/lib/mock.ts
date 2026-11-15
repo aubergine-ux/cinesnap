@@ -78,14 +78,15 @@ export function demoProject(): Project {
     crop,
     cuts: [],
     zooms: [],
-    autoZoom: { enabled: true, scale: 2, mergeGapMs: 2500, onTyping: true },
-    cursor: { show: true, size: 1.6, smoothing: 0.6, ripples: true, rippleColor: "#ffffff", hideWhenIdleMs: 0, style: "arrow" },
+    autoZoom: { enabled: true, scale: 2, mergeGapMs: 2500, onTyping: true, followText: true },
+    cursor: { show: true, size: 1.6, smoothing: 0.6, ripples: true, rippleColor: "#ffffff", hideWhenIdleMs: 0, style: "arrow", hotspotX: 0, hotspotY: 0, highlight: "none", highlightColor: "#ffd84a", highlightSize: 34 },
     frame: {
       aspect: "16:9",
       padding: 0.06,
       radius: 14,
       shadow: 0.55,
       background: { type: "gradient", from: "#6d5dfc", to: "#e44d8a", angle: 135 },
+      device: { kind: "none", title: "", dark: true },
     },
     webcam: { show: true, corner: "bottom-right", size: 0.18, shape: "circle" },
     export: { format: "mp4", preset: "1080p", fps: 60, quality: "high" },
@@ -97,6 +98,8 @@ export function demoProject(): Project {
     captions: { show: true, style: "karaoke", y: 0.82, size: 1, color: "#ffffff", highlight: "#ffd84a", background: "#000000a6", maxChars: 36, uppercase: false },
     audio: { micVolume: 1, micMute: false, systemVolume: 1, systemMute: false, denoise: 0, normalize: false, eq: { enabled: false, lowCutHz: 80, bassDb: 0, presenceDb: 3, airDb: 1.5 }, music: undefined },
     markers: [{ id: "m1", atMs: 9000, label: "Search" }],
+    reframe: { enabled: false, segments: [] },
+    motionBlur: { enabled: true, strength: 0.5 },
   };
 }
 
@@ -519,6 +522,8 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
       return;
     case "auto_zoom":
       return autoZoom(args.project as Project);
+    case "analyze_project":
+      return false;
     case "compute_motion":
       return computeMotion(args.project as Project);
     case "export_video": {

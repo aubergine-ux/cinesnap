@@ -75,6 +75,33 @@ fn reads_everything_the_editor_writes() {
     );
     assert!(main.source.video.vfr);
     assert_eq!(main.source.video.hdr.as_deref(), Some("tonemapped"));
+    let d = &p.frame.device;
+    assert_eq!(
+        (d.kind.as_str(), d.title.as_str(), d.dark),
+        ("browser", "cinesnap.dev/docs", false)
+    );
+    assert!(p.auto_zoom.follow_text);
+    assert!(p.reframe.enabled);
+    let r = &p.reframe.segments[0];
+    assert_eq!(
+        (r.start_ms, r.end_ms, r.x, r.y),
+        (5000.0, 8000.0, 640.0, 360.0)
+    );
+    assert!(p.motion_blur.enabled && p.motion_blur.strength == 0.75);
+    let c = &p.cursor;
+    assert_eq!(
+        (c.style.as_str(), c.image.as_deref()),
+        ("image", Some("cursors/pointer.png"))
+    );
+    assert_eq!((c.hotspot_x, c.hotspot_y), (0.2, 0.1));
+    assert_eq!(
+        (
+            c.highlight.as_str(),
+            c.highlight_color.as_str(),
+            c.highlight_size
+        ),
+        ("ring", "#00ff88", 40.0)
+    );
     let markers: Vec<(f64, &str)> = p
         .markers
         .iter()
@@ -124,7 +151,7 @@ fn motion_covers_the_whole_timeline() {
         .iter()
         .map(|_| EventLog::empty(1920, 1080))
         .collect();
-    let m = compute_motion(&p, &logs);
+    let m = compute_motion(&p, &logs, &[]);
     // 3 s card + 24 s + 8 s (the last second cut) + 3 s card, at 30 fps.
     assert_eq!(m.fps, 30);
     assert_eq!(m.frames, 37 * 30);

@@ -71,7 +71,7 @@ export function Timeline() {
   const cutMark = useStore((s) => s.cutMark);
   const past = useStore((s) => s.past.length);
   const future = useStore((s) => s.future.length);
-  const { update, select, editZoom, addZoomAt, seekSource, setPlaying, setCutMode, undo, redo, sourceTime, addAnnotation, editAnnotation, editWebcamKey, addWebcamKey, addMarker, editMarker } = useStore.getState();
+  const { update, select, editZoom, addZoomAt, seekSource, setPlaying, setCutMode, undo, redo, sourceTime, addAnnotation, editAnnotation, editWebcamKey, addWebcamKey, addMarker, editMarker, addReframeAt, editReframe } = useStore.getState();
 
   const scroller = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState(800);
@@ -435,6 +435,62 @@ export function Timeline() {
               );
             })}
           </div>
+
+          {project.reframe.enabled && (
+            <div
+              className="tl-track zoom-track frame-track"
+              title="Double-click to place the window by hand for a while"
+              onPointerDown={(e) => {
+                if (e.target === e.currentTarget) select(null);
+              }}
+              onDoubleClick={(e) => {
+                if (e.target === e.currentTarget) addReframeAt(msAt(e.clientX));
+              }}
+            >
+              <span className="track-label">Frame</span>
+              {project.reframe.segments.map((r) => {
+                const selected = selection?.kind === "reframe" && selection.id === r.id;
+                const segs = () => useStore.getState().project!.reframe.segments;
+                return (
+                  <div
+                    key={r.id}
+                    className={`zoom-block manual ${selected ? "selected" : ""}`}
+                    style={{ left: PAD + r.startMs * pxPerMs, width: (r.endMs - r.startMs) * pxPerMs }}
+                    onPointerDown={(e) => {
+                      select({ kind: "reframe", id: r.id });
+                      const start0 = r.startMs;
+                      const bounds = clipBounds(start0);
+                      drag(e, (dx) => {
+                        const m = moveZoom(segs(), r.id, start0 + dx / pxPerMs, duration);
+                        if (!m) return;
+                        const len = m.endMs - m.startMs;
+                        const start = Math.max(bounds.startMs, Math.min(bounds.endMs - len, m.startMs));
+                        editReframe(r.id, { startMs: start, endMs: start + len }, "move");
+                      });
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                  >
+                    <span className="zoom-label">⌖ placed</span>
+                    {(["start", "end"] as const).map((edge) => (
+                      <span
+                        key={edge}
+                        className={`handle ${edge}`}
+                        onPointerDown={(e) => {
+                          select({ kind: "reframe", id: r.id });
+                          const bounds = clipBounds(r.startMs);
+                          drag(e, (_dx, ev) => {
+                            const ms = Math.max(bounds.startMs, Math.min(bounds.endMs, msAt(ev.clientX)));
+                            const m = resizeZoom(segs(), r.id, edge, ms, duration);
+                            if (m) editReframe(r.id, m, "resize");
+                          });
+                        }}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <div className="tl-track cut-track" onPointerDown={startCutDrag}>
             <span className="track-label">Cuts</span>

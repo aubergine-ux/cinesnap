@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aspectRatio, clampCentre, coverRect, fitSize, frameRect, gradientLine, mapPoint, outputFps, outputSize, unitScale, viewRect, webcamBox, cornerCentre } from "./layout";
+import { aspectRatio, layoutFor, viewOf, clampCentre, coverRect, fitSize, frameRect, gradientLine, mapPoint, outputFps, outputSize, unitScale, viewRect, webcamBox, cornerCentre } from "./layout";
 import type { ExportSettings } from "./types";
 
 const crop = { x: 0, y: 0, width: 2560, height: 1440 };
@@ -127,5 +127,54 @@ describe("helpers", () => {
     expect(right.x0).toBeCloseTo(0);
     expect(right.x1).toBeCloseTo(100);
     expect(right.y0).toBeCloseTo(25);
+  });
+});
+
+// The same cases as the tests of `Layout` in layout.rs.
+describe("layoutFor", () => {
+  const crop = { x: 0, y: 0, width: 2560, height: 1440 };
+  const style = (more: Partial<{ device: { kind: string }; reframe: boolean }> = {}) => ({ padding: 0.06, radius: 14, ...more });
+
+  it("shows the whole crop without reframing", () => {
+    const l = layoutFor(1920, 1080, style(), crop);
+    expect([l.viewW, l.viewH]).toEqual([2560, 1440]);
+    expect(viewOf(l, 1280, 720, 2).w).toBe(1280);
+    expect(l.body).toEqual(l.frame);
+  });
+
+  it("fills a vertical output with a window of its shape when reframing", () => {
+    const l = layoutFor(1080, 1920, style({ reframe: true }), crop);
+    const pad = 0.06 * 1080;
+    expect(l.frame.w).toBeCloseTo(1080 - 2 * pad, 9);
+    expect(l.frame.h).toBeCloseTo(1920 - 2 * pad, 9);
+    expect(l.viewH).toBe(1440);
+    expect(l.viewW / l.viewH).toBeCloseTo(l.frame.w / l.frame.h, 9);
+    const sq = layoutFor(1080, 1080, style({ reframe: true }), crop);
+    expect(sq.viewW).toBeCloseTo(1440, 9);
+  });
+
+  it("puts window chrome on top and squares the frame's top corners", () => {
+    const l = layoutFor(1920, 1080, style({ device: { kind: "macos" } }), { x: 0, y: 0, width: 1920, height: 1080 });
+    expect(l.insets.top).toBe(40);
+    expect(l.body.y).toBeCloseTo(l.frame.y - 40, 9);
+    expect(l.radii.slice(0, 2)).toEqual([0, 0]);
+    expect(l.body.y + l.body.h / 2).toBeCloseTo(540, 9);
+    expect(l.frame.w / l.frame.h).toBeCloseTo(16 / 9, 9);
+  });
+
+  it("fits laptops, phones and windows inside the padding", () => {
+    for (const kind of ["laptop", "phone", "browser", "windows"]) {
+      for (const [W, H] of [
+        [1920, 1080],
+        [1080, 1920],
+        [1080, 1080],
+      ]) {
+        const l = layoutFor(W, H, style({ device: { kind } }), crop);
+        const pad = 0.06 * Math.min(W, H);
+        expect(l.frame.w + l.insets.left + l.insets.right).toBeLessThanOrEqual(W - 2 * pad + 1e-6);
+        expect(l.frame.h + l.insets.top + l.insets.bottom).toBeLessThanOrEqual(H - 2 * pad + 1e-6);
+        expect(l.body.x).toBeLessThanOrEqual(l.frame.x);
+      }
+    }
   });
 });

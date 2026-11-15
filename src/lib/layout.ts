@@ -85,6 +85,136 @@ export function unitScale(W: number, H: number): number {
   return Math.min(W, H) / 1080;
 }
 
+export type DeviceKind = "none" | "browser" | "macos" | "windows" | "laptop" | "phone";
+
+export interface Insets {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/** Output geometry of a recording clip; mirrors `Layout` in `layout.rs`. */
+export interface FrameLayout {
+  /** Where the recording shows. */
+  frame: Box;
+  /** Corner radii: top left, top right, bottom right, bottom left. */
+  radii: [number, number, number, number];
+  /** Size of the source shown at zoom 1. */
+  viewW: number;
+  viewH: number;
+  device: DeviceKind;
+  /** The device or window around the frame (the frame itself without one). */
+  body: Box;
+  bodyRadius: number;
+  insets: Insets;
+}
+
+export const TITLE_BAR = 40;
+export const BROWSER_BAR = 60;
+export const LAPTOP_BEZEL = 0.03;
+export const LAPTOP_CHIN = 0.045;
+export const LAPTOP_BASE = 0.04;
+export const LAPTOP_OVERHANG = 0.07;
+export const PHONE_BEZEL = 0.022;
+
+const DEVICES: DeviceKind[] = ["none", "browser", "macos", "windows", "laptop", "phone"];
+
+export function deviceKind(s: string | undefined): DeviceKind {
+  return DEVICES.includes(s as DeviceKind) ? (s as DeviceKind) : "none";
+}
+
+export const isWindow = (d: DeviceKind) => d === "browser" || d === "macos" || d === "windows";
+
+export function deviceInsets(kind: DeviceKind, s: number, short: number): Insets {
+  const none = { left: 0, top: 0, right: 0, bottom: 0 };
+  switch (kind) {
+    case "browser":
+      return { ...none, top: BROWSER_BAR * s };
+    case "macos":
+    case "windows":
+      return { ...none, top: TITLE_BAR * s };
+    case "laptop": {
+      const side = (LAPTOP_BEZEL + LAPTOP_OVERHANG) * short;
+      return { left: side, right: side, top: LAPTOP_BEZEL * short, bottom: (LAPTOP_CHIN + LAPTOP_BASE) * short };
+    }
+    case "phone": {
+      const b = PHONE_BEZEL * short;
+      return { left: b, top: b, right: b, bottom: b };
+    }
+    default:
+      return none;
+  }
+}
+
+/** The largest window of aspect `ratio` inside `crop`. */
+export function fitInside(crop: Rect, ratio: number): { w: number; h: number } {
+  return crop.width / crop.height > ratio ? { w: crop.height * ratio, h: crop.height } : { w: crop.width, h: crop.width / ratio };
+}
+
+export interface LayoutStyle {
+  padding: number;
+  radius: number;
+  device?: { kind: string };
+  reframe?: boolean;
+}
+
+export function layoutFor(W: number, H: number, style: LayoutStyle, crop: Rect): FrameLayout {
+  const short = Math.min(W, H);
+  const s = short / 1080;
+  const pad = style.padding * short;
+  const aw = Math.max(2, W - 2 * pad);
+  const ah = Math.max(2, H - 2 * pad);
+  const device = deviceKind(style.device?.kind);
+  const ins = deviceInsets(device, s, Math.min(aw, ah));
+  const iw = Math.max(2, aw - ins.left - ins.right);
+  const ih = Math.max(2, ah - ins.top - ins.bottom);
+  const cropRatio = crop.height > 0 ? crop.width / crop.height : 16 / 9;
+  let fw: number, fh: number;
+  if (style.reframe) [fw, fh] = [iw, ih];
+  else if (iw / ih > cropRatio) [fw, fh] = [ih * cropRatio, ih];
+  else [fw, fh] = [iw, iw / cropRatio];
+  const view = style.reframe ? fitInside(crop, fw / fh) : { w: crop.width, h: crop.height };
+  const tw = fw + ins.left + ins.right;
+  const th = fh + ins.top + ins.bottom;
+  const frame = { x: (W - tw) / 2 + ins.left, y: (H - th) / 2 + ins.top, w: fw, h: fh };
+  const r = Math.min(style.radius * s, Math.min(fw, fh) / 2);
+  let radii: [number, number, number, number] = [r, r, r, r];
+  let body = frame;
+  let bodyRadius = r;
+  if (isWindow(device)) {
+    const rr = Math.min(Math.max(r, 8 * s), Math.min(fw, fh) / 2);
+    radii = [0, 0, rr, rr];
+    body = { ...frame, y: frame.y - ins.top, h: fh + ins.top };
+    bodyRadius = rr;
+  } else if (device === "laptop") {
+    const b = LAPTOP_BEZEL * Math.min(aw, ah);
+    radii = [0.4 * b, 0.4 * b, 0.4 * b, 0.4 * b];
+    body = { x: frame.x - b, y: frame.y - b, w: fw + 2 * b, h: fh + b + LAPTOP_CHIN * Math.min(aw, ah) };
+    bodyRadius = 0.8 * b;
+  } else if (device === "phone") {
+    const b = PHONE_BEZEL * Math.min(aw, ah);
+    const screen = 0.11 * Math.min(fw, fh);
+    radii = [screen, screen, screen, screen];
+    body = { x: frame.x - b, y: frame.y - b, w: fw + 2 * b, h: fh + 2 * b };
+    bodyRadius = screen + b;
+  }
+  return { frame, radii, viewW: view.w, viewH: view.h, device, body, bodyRadius, insets: ins };
+}
+
+/** The part of the source visible for a camera state. */
+export function viewOf(l: FrameLayout, cx: number, cy: number, scale: number): Box {
+  const sc = Math.max(1, scale);
+  const w = l.viewW / sc;
+  const h = l.viewH / sc;
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
+/** The layout of a clip in a project. */
+export function clipLayout(W: number, H: number, project: { frame: { padding: number; radius: number; device?: { kind: string } }; reframe?: { enabled: boolean } }, crop: Rect): FrameLayout {
+  return layoutFor(W, H, { padding: project.frame.padding, radius: project.frame.radius, device: project.frame.device, reframe: project.reframe?.enabled }, crop);
+}
+
 /** Where the recording sits inside the output. */
 export function frameRect(W: number, H: number, padding: number, crop: Rect): Box {
   const pad = padding * Math.min(W, H);

@@ -176,7 +176,7 @@ function CardProps({ card, index, count }: { card: CardClip; index: number; coun
 export function Inspector() {
   const project = useStore((s) => s.project)!;
   const selection = useStore((s) => s.selection);
-  const { editZoom, editWebcamKey, editMarker } = useStore.getState();
+  const { editZoom, editWebcamKey, editMarker, editReframe } = useStore.getState();
   if (!selection) return null;
 
   if (selection.kind === "zoom") {
@@ -243,6 +243,21 @@ export function Inspector() {
         </p>
         <TransitionProps clip={clip} first={index === 0} />
         <ClipActions clip={clip} index={index} count={project.clips.length} />
+      </Section>
+    );
+  }
+
+  if (selection.kind === "reframe") {
+    const r = project.reframe.segments.find((x) => x.id === selection.id);
+    const span = r && spans(project).find((sp) => r.startMs >= sp.startMs && r.startMs < sp.endMs);
+    const clip = span && project.clips[span.index];
+    if (!r || clip?.kind !== "recording") return null;
+    const c = clip.crop;
+    return (
+      <Section title="Frame placed by hand" right={<Remove title="Delete segment" />}>
+        <Slider label="Across" value={(r.x - c.x) / c.width} min={0} max={1} step={0.005} format={pct} onChange={(v) => editReframe(r.id, { x: c.x + v * c.width }, "x")} />
+        <Slider label="Down" value={(r.y - c.y) / c.height} min={0} max={1} step={0.005} format={pct} onChange={(v) => editReframe(r.id, { y: c.y + v * c.height }, "y")} />
+        <p className="hint">The window eases here at the start of the segment and back to following the action after it. It never shows anything outside the recording.</p>
       </Section>
     );
   }

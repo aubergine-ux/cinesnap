@@ -187,3 +187,38 @@ describe("webcam", () => {
     expect(webcamStateAt(p, 2500)).toEqual({ x: 0.1, y: 0.2, size: 0.3, show: false });
   });
 });
+
+describe("markers and frame segments", () => {
+  it("move with the clips they belong to", () => {
+    const p = twoClips();
+    const second = spans(p)[1].startMs;
+    p.markers = [
+      { id: "a", atMs: 1000, label: "" },
+      { id: "b", atMs: second + 500, label: "" },
+    ];
+    p.reframe.segments = [{ id: "r", startMs: second + 200, endMs: second + 900, x: 1, y: 2 }];
+    insertClip(p, 1, { ...newCard(p, "Between"), id: "card" });
+    const card = spans(p)[1].durationMs;
+    expect(p.markers.map((m) => m.atMs)).toEqual([1000, second + 500 + card]);
+    expect(p.reframe.segments[0].startMs).toBe(second + 200 + card);
+
+    removeClip(p, 2);
+    expect(p.markers.map((m) => m.id)).toEqual(["a"]);
+    expect(p.reframe.segments).toHaveLength(0);
+  });
+});
+
+describe("style presets and new settings", () => {
+  it("keep the title bar text and fill in what older presets lack", () => {
+    const p = demoProject();
+    p.frame.device = { kind: "browser", title: "example.com", dark: true };
+    const old = structuredClone(BUILTIN_STYLES[1]);
+    // A preset saved before devices and cursor highlights existed.
+    delete (old.frame as Partial<typeof old.frame>).device;
+    old.cursor = { show: true, size: 2, smoothing: 0.5, ripples: false, rippleColor: "#fff", hideWhenIdleMs: 0, style: "arrow" } as typeof old.cursor;
+    applyStyle(p, old);
+    expect(p.frame.device).toEqual({ kind: "none", title: "example.com", dark: true });
+    expect(p.cursor.highlight).toBe("none");
+    expect(p.cursor.size).toBe(2);
+  });
+});

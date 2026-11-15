@@ -45,12 +45,17 @@ function everything(): Project {
       { t0: 4400, t1: 5000, text: "world." },
     ],
   };
+  p.reframe = { enabled: true, segments: [{ id: "r1", startMs: 5000, endMs: 8000, x: 640, y: 360 }] };
+  p.motionBlur = { enabled: true, strength: 0.75 };
   p.markers = [
     { id: "m1", atMs: 4200, label: "Install" },
     { id: "m2", atMs: 11000, label: "" },
   ];
   p.audio = { micVolume: 1.2, micMute: false, systemVolume: 0.7, systemMute: true, denoise: 0.5, normalize: true, eq: { enabled: true, lowCutHz: 90, bassDb: -1, presenceDb: 4, airDb: 2 }, music: { source: "builtin:open-sky", volume: 0.3, duck: true, duckDb: -12, fadeInMs: 500, fadeOutMs: 2000 } };
   applyStyle(p, BUILTIN_STYLES[3]);
+  // After the style: a preset brings its own cursor and device.
+  p.frame.device = { kind: "browser", title: "cinesnap.dev/docs", dark: false };
+  p.cursor = { ...p.cursor, style: "image", image: "cursors/pointer.png", hotspotX: 0.2, hotspotY: 0.1, highlight: "ring", highlightColor: "#00ff88", highlightSize: 40 };
   p.export = { format: "mp4", preset: "shorts", fps: 60, quality: "medium" };
   return p;
 }

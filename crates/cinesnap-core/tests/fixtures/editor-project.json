@@ -39,16 +39,23 @@
     "enabled": true,
     "scale": 2,
     "mergeGapMs": 2500,
-    "onTyping": true
+    "onTyping": true,
+    "followText": true
   },
   "cursor": {
+    "hideWhenIdleMs": 0,
+    "style": "image",
+    "hotspotX": 0.2,
+    "hotspotY": 0.1,
+    "highlight": "ring",
+    "highlightColor": "#00ff88",
+    "highlightSize": 40,
     "show": true,
     "size": 1.9,
     "smoothing": 0.55,
     "ripples": true,
     "rippleColor": "#fde047",
-    "hideWhenIdleMs": 0,
-    "style": "arrow"
+    "image": "cursors/pointer.png"
   },
   "frame": {
     "padding": 0.07,
@@ -59,6 +66,11 @@
       "from": "#f97316",
       "to": "#ec4899",
       "angle": 135
+    },
+    "device": {
+      "kind": "browser",
+      "title": "cinesnap.dev/docs",
+      "dark": false
     },
     "aspect": "16:9"
   },
@@ -353,6 +365,22 @@
       "label": ""
     }
   ],
+  "reframe": {
+    "enabled": true,
+    "segments": [
+      {
+        "id": "r1",
+        "startMs": 5000,
+        "endMs": 8000,
+        "x": 640,
+        "y": 360
+      }
+    ]
+  },
+  "motionBlur": {
+    "enabled": true,
+    "strength": 0.75
+  },
   "transcript": {
     "language": "en",
     "words": [

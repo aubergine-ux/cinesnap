@@ -144,10 +144,27 @@ export function VideoPanel() {
         <Slider label="Zoom level" value={project.autoZoom.scale} min={1.2} max={4} step={0.05} format={(v) => `${v.toFixed(2)}×`} disabled={!project.autoZoom.enabled} onChange={(v) => setAuto("scale", (p) => void (p.autoZoom.scale = v))} />
         <Slider label="Merge clicks within" value={project.autoZoom.mergeGapMs} min={500} max={6000} step={100} format={ms} disabled={!project.autoZoom.enabled} onChange={(v) => setAuto("gap", (p) => void (p.autoZoom.mergeGapMs = v))} />
         <Toggle label="Zoom while typing" value={project.autoZoom.onTyping} onChange={(v) => setAuto("typing", (p) => void (p.autoZoom.onTyping = v))} />
+        <Toggle label="Follow the text cursor" value={project.autoZoom.followText} onChange={(v) => setAuto("follow", (p) => void (p.autoZoom.followText = v))} />
+        <p className="hint">Typing zooms to where the text appears on screen, and the camera follows it as you type, instead of staying where you last clicked.</p>
         <button className="btn wide" onClick={() => void regenerateZooms()}>
           Regenerate zooms
         </button>
         <p className="hint">Zooms you have edited or added by hand are kept.</p>
+      </Section>
+
+      <Section title="Motion blur">
+        <Toggle label="Blur fast camera and cursor movement" value={project.motionBlur.enabled} onChange={(v) => set("blur:on", (p) => void (p.motionBlur.enabled = v))} />
+        <Slider
+          label="Amount"
+          value={project.motionBlur.strength}
+          min={0.1}
+          max={1}
+          step={0.05}
+          format={(v) => `${Math.round(v * 360)}°`}
+          disabled={!project.motionBlur.enabled}
+          onChange={(v) => set("blur:amount", (p) => void (p.motionBlur.strength = v))}
+        />
+        <p className="hint">Like a film camera's shutter: 180° looks natural, more is dreamier. Still frames are never blurred.</p>
       </Section>
 
       {clip?.kind === "recording" &&

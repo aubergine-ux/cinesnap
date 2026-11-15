@@ -4,7 +4,7 @@
 
 import { aspectRatio, cornerCentre, effectiveAspect, type Box } from "./layout";
 import { normalizeCuts } from "./time";
-import type { Annotation, AnnotationType, CardClip, Clip, Cut, Imported, Project, Rect, RecordingClip, StylePreset, WebcamKey, Word } from "./types";
+import type { Annotation, AnnotationType, CardClip, Clip, Cut, DeviceFrame, Imported, Project, Rect, RecordingClip, StylePreset, WebcamKey, Word } from "./types";
 
 export interface Span {
   index: number;
@@ -71,8 +71,8 @@ export function shiftFrom(p: Project, atMs: number, deltaMs: number): void {
     else cuts.push({ startMs: c.startMs, endMs: atMs }, { startMs: atMs + deltaMs, endMs: c.endMs + deltaMs });
   }
   p.cuts = cuts.filter((c) => c.endMs - c.startMs >= 1);
-  // Zooms and annotations belong to the clip they start in.
-  for (const list of [p.zooms, p.annotations]) {
+  // Zooms, annotations and reframe segments belong to the clip they start in.
+  for (const list of [p.zooms, p.annotations, p.reframe.segments]) {
     for (const it of list) {
       if (it.startMs >= atMs - EPS) [it.startMs, it.endMs] = [it.startMs + deltaMs, it.endMs + deltaMs];
       else it.endMs = Math.min(it.endMs, atMs);
@@ -127,6 +127,7 @@ export function removeClip(p: Project, index: number): boolean {
   p.annotations = p.annotations.filter((x) => x.startMs < a || x.startMs >= b);
   p.webcamKeys = p.webcamKeys.filter((k) => k.atMs < a || k.atMs >= b);
   p.markers = p.markers.filter((m) => m.atMs < a || m.atMs >= b);
+  p.reframe.segments = p.reframe.segments.filter((r) => r.startMs < a || r.startMs >= b);
   if (p.transcript) p.transcript.words = p.transcript.words.filter((w) => w.t0 < a || w.t0 >= b);
   p.clips.splice(index, 1);
   shiftFrom(p, b, a - b);
@@ -169,6 +170,7 @@ export function moveClip(p: Project, from: number, to: number): void {
   p.annotations = p.annotations.map(range).sort((a, b) => a.startMs - b.startMs);
   p.webcamKeys = p.webcamKeys.map((k) => ({ ...k, atMs: point(k.atMs) })).sort((a, b) => a.atMs - b.atMs);
   p.markers = p.markers.map((m) => ({ ...m, atMs: point(m.atMs) })).sort((a, b) => a.atMs - b.atMs);
+  p.reframe.segments = p.reframe.segments.map(range).sort((a, b) => a.startMs - b.startMs);
   if (p.transcript) {
     p.transcript.words = p.transcript.words
       .map((w) => {
@@ -287,11 +289,17 @@ export function extractStyle(p: Project, name: string): StylePreset {
   });
 }
 
+export const CURSOR_DEFAULTS = { hideWhenIdleMs: 0, style: "arrow", hotspotX: 0, hotspotY: 0, highlight: "none", highlightColor: "#ffd84a", highlightSize: 34 } as const;
+export const NO_DEVICE: DeviceFrame = { kind: "none", title: "", dark: true };
+
 /** Apply a preset: everything about the look, nothing about the content. */
 export function applyStyle(p: Project, style: StylePreset): void {
   const s = structuredClone(style);
-  p.frame = { ...s.frame, aspect: p.frame.aspect };
-  p.cursor = s.cursor;
+  // Presets saved before a setting existed leave it at its default; the
+  // text in a window's title bar is content, not look.
+  const device = { ...NO_DEVICE, ...s.frame.device, title: p.frame.device.title };
+  p.frame = { ...s.frame, aspect: p.frame.aspect, device };
+  p.cursor = { ...CURSOR_DEFAULTS, ...s.cursor };
   p.theme = s.theme;
   p.keystrokes = s.keystrokes;
   // Whether captions show is content, not style.
@@ -302,8 +310,8 @@ export function applyStyle(p: Project, style: StylePreset): void {
 export const BUILTIN_STYLES: StylePreset[] = [
   {
     name: "Cinesnap",
-    frame: { padding: 0.06, radius: 14, shadow: 0.55, background: { type: "gradient", from: "#6d5dfc", to: "#e44d8a", angle: 135 } },
-    cursor: { show: true, size: 1.6, smoothing: 0.6, ripples: true, rippleColor: "#ffffff", hideWhenIdleMs: 0, style: "arrow" },
+    frame: { padding: 0.06, radius: 14, shadow: 0.55, background: { type: "gradient", from: "#6d5dfc", to: "#e44d8a", angle: 135 }, device: NO_DEVICE },
+    cursor: { show: true, size: 1.6, smoothing: 0.6, ripples: true, rippleColor: "#ffffff", ...CURSOR_DEFAULTS },
     theme: { font: "Inter", accent: "#6d5dfc", text: "#ffffff", surface: "#14151af0" },
     keystrokes: { show: true, position: "bottom", size: 1, holdMs: 1500 },
     captions: { show: true, style: "karaoke", y: 0.82, size: 1, color: "#ffffff", highlight: "#ffd84a", background: "#000000a6", maxChars: 36, uppercase: false },
@@ -311,8 +319,8 @@ export const BUILTIN_STYLES: StylePreset[] = [
   },
   {
     name: "Midnight",
-    frame: { padding: 0.05, radius: 10, shadow: 0.7, background: { type: "gradient", from: "#1e293b", to: "#0f172a", angle: 180 } },
-    cursor: { show: true, size: 1.5, smoothing: 0.65, ripples: true, rippleColor: "#38bdf8", hideWhenIdleMs: 0, style: "arrow" },
+    frame: { padding: 0.05, radius: 10, shadow: 0.7, background: { type: "gradient", from: "#1e293b", to: "#0f172a", angle: 180 }, device: NO_DEVICE },
+    cursor: { show: true, size: 1.5, smoothing: 0.65, ripples: true, rippleColor: "#38bdf8", ...CURSOR_DEFAULTS },
     theme: { font: "IBM Plex Mono", accent: "#38bdf8", text: "#e2e8f0", surface: "#0b1220f0" },
     keystrokes: { show: true, position: "bottom", size: 1, holdMs: 1500 },
     captions: { show: true, style: "plain", y: 0.82, size: 0.9, color: "#e2e8f0", highlight: "#38bdf8", background: "#0b1220d0", maxChars: 40, uppercase: false },
@@ -320,8 +328,8 @@ export const BUILTIN_STYLES: StylePreset[] = [
   },
   {
     name: "Paper",
-    frame: { padding: 0.08, radius: 8, shadow: 0.3, background: { type: "solid", color: "#f3efe6" } },
-    cursor: { show: true, size: 1.6, smoothing: 0.6, ripples: true, rippleColor: "#c2410c", hideWhenIdleMs: 0, style: "arrow" },
+    frame: { padding: 0.08, radius: 8, shadow: 0.3, background: { type: "solid", color: "#f3efe6" }, device: NO_DEVICE },
+    cursor: { show: true, size: 1.6, smoothing: 0.6, ripples: true, rippleColor: "#c2410c", ...CURSOR_DEFAULTS },
     theme: { font: "PT Serif", accent: "#c2410c", text: "#1c1917", surface: "#fffaf0f5" },
     keystrokes: { show: true, position: "bottom", size: 1, holdMs: 1500 },
     captions: { show: true, style: "karaoke", y: 0.82, size: 1, color: "#1c1917", highlight: "#c2410c", background: "#fffaf0e6", maxChars: 36, uppercase: false },
@@ -329,8 +337,8 @@ export const BUILTIN_STYLES: StylePreset[] = [
   },
   {
     name: "Pop",
-    frame: { padding: 0.07, radius: 22, shadow: 0.5, background: { type: "gradient", from: "#f97316", to: "#ec4899", angle: 135 } },
-    cursor: { show: true, size: 1.9, smoothing: 0.55, ripples: true, rippleColor: "#fde047", hideWhenIdleMs: 0, style: "arrow" },
+    frame: { padding: 0.07, radius: 22, shadow: 0.5, background: { type: "gradient", from: "#f97316", to: "#ec4899", angle: 135 }, device: NO_DEVICE },
+    cursor: { show: true, size: 1.9, smoothing: 0.55, ripples: true, rippleColor: "#fde047", ...CURSOR_DEFAULTS },
     theme: { font: "Poppins", accent: "#ec4899", text: "#ffffff", surface: "#1a1020f0" },
     keystrokes: { show: true, position: "bottom", size: 1.15, holdMs: 1500 },
     captions: { show: true, style: "pop", y: 0.8, size: 1.2, color: "#ffffff", highlight: "#fde047", maxChars: 24, uppercase: true },

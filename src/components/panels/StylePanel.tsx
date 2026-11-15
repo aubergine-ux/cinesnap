@@ -2,8 +2,8 @@ import { useState } from "react";
 import { pickImage } from "../../lib/api";
 import { BUILTIN_STYLES } from "../../lib/edit";
 import { useStore } from "../../lib/store";
-import type { Aspect, Background, KeystrokeSettings, Project } from "../../lib/types";
-import { AlphaColorInput, ColorInput, Section, Segmented, SelectRow, Slider, Toggle } from "../controls";
+import type { Aspect, Background, CursorSettings, DeviceKind, KeystrokeSettings, Project } from "../../lib/types";
+import { AlphaColorInput, ColorInput, Section, Segmented, SelectRow, Slider, TextInput, Toggle } from "../controls";
 import { FONT_OPTIONS } from "./Inspector";
 
 export const GRADIENTS: { from: string; to: string; angle: number }[] = [
@@ -81,6 +81,14 @@ export function StylePanel() {
     if (!path) return;
     setBg(type === "image" ? { type, path } : { type, path, blur: bg.type === "wallpaper" ? bg.blur : 40 });
   };
+  const chooseCursor = async () => {
+    const path = await pickImage();
+    if (!path) return;
+    set("cursor:image", (p) => {
+      p.cursor.style = "image";
+      p.cursor.image = path;
+    });
+  };
   const theme = project.theme;
   const keys = project.keystrokes;
 
@@ -111,6 +119,42 @@ export function StylePanel() {
             ]}
           />
         </div>
+        {project.frame.aspect !== "source" && (
+          <>
+            <Toggle label="Fill the shape, follow the action" value={project.reframe.enabled} onChange={(v) => set("reframe", (p) => void (p.reframe.enabled = v))} />
+            <p className="hint">
+              {project.reframe.enabled
+                ? "A window of this shape follows the cursor and what changes on screen. Add frame segments on the timeline to place it by hand."
+                : "The whole recording is shown, with space around it if the shapes differ."}
+            </p>
+          </>
+        )}
+        <SelectRow
+          label="Device"
+          value={project.frame.device.kind}
+          options={[
+            { value: "none", label: "None" },
+            { value: "browser", label: "Browser window" },
+            { value: "macos", label: "macOS window" },
+            { value: "windows", label: "Windows window" },
+            { value: "laptop", label: "Laptop" },
+            { value: "phone", label: "Phone" },
+          ]}
+          onChange={(v) => set("device", (p) => void (p.frame.device.kind = v as DeviceKind))}
+        />
+        {project.frame.device.kind !== "none" && (
+          <>
+            {["browser", "macos", "windows"].includes(project.frame.device.kind) && (
+              <TextInput
+                label={project.frame.device.kind === "browser" ? "Address" : "Title"}
+                value={project.frame.device.title}
+                placeholder={project.frame.device.kind === "browser" ? "example.com" : "My app"}
+                onChange={(v) => set("device:title", (p) => void (p.frame.device.title = v))}
+              />
+            )}
+            <Toggle label="Dark" value={project.frame.device.dark} onChange={(v) => set("device:dark", (p) => void (p.frame.device.dark = v))} />
+          </>
+        )}
         <Slider label="Padding" value={project.frame.padding} min={0} max={0.25} step={0.005} format={pct} onChange={(v) => set("padding", (p) => void (p.frame.padding = v))} />
         <Slider label="Rounded corners" value={project.frame.radius} min={0} max={60} step={1} format={(v) => `${v}px`} onChange={(v) => set("radius", (p) => void (p.frame.radius = v))} />
         <Slider label="Shadow" value={project.frame.shadow} min={0} max={1} format={pct} onChange={(v) => set("shadow", (p) => void (p.frame.shadow = v))} />
@@ -168,6 +212,44 @@ export function StylePanel() {
       <Section title="Cursor" defaultOpen={false}>
         {cursorMode !== "metadata" && <p className="hint warn">The cursor is baked into this recording, so it cannot be restyled.</p>}
         <Toggle label="Show cursor" value={project.cursor.show} onChange={(v) => set("cursor:show", (p) => void (p.cursor.show = v))} />
+        <div className="stack">
+          <span className="row-label">Look</span>
+          <Segmented<string>
+            value={project.cursor.style}
+            onChange={(v) => (v === "image" ? void chooseCursor() : set("cursor:style", (p) => void (p.cursor.style = v)))}
+            options={[
+              { value: "arrow", label: "Dark" },
+              { value: "light", label: "Light" },
+              { value: "dot", label: "Dot" },
+              { value: "image", label: "Image…" },
+            ]}
+          />
+        </div>
+        {project.cursor.style === "image" && (
+          <>
+            <p className="hint">{project.cursor.image}</p>
+            <Slider label="Tip across" value={project.cursor.hotspotX} min={0} max={1} step={0.01} format={pct} onChange={(v) => set("cursor:hx", (p) => void (p.cursor.hotspotX = v))} />
+            <Slider label="Tip down" value={project.cursor.hotspotY} min={0} max={1} step={0.01} format={pct} onChange={(v) => set("cursor:hy", (p) => void (p.cursor.hotspotY = v))} />
+          </>
+        )}
+        <div className="stack">
+          <span className="row-label">Highlight</span>
+          <Segmented<CursorSettings["highlight"]>
+            value={project.cursor.highlight}
+            onChange={(v) => set("cursor:hl", (p) => void (p.cursor.highlight = v))}
+            options={[
+              { value: "none", label: "None" },
+              { value: "ring", label: "Ring" },
+              { value: "spotlight", label: "Spotlight" },
+            ]}
+          />
+        </div>
+        {project.cursor.highlight !== "none" && (
+          <>
+            <Slider label="Highlight size" value={project.cursor.highlightSize} min={12} max={160} step={1} format={(v) => `${v}px`} onChange={(v) => set("cursor:hlsize", (p) => void (p.cursor.highlightSize = v))} />
+            {project.cursor.highlight === "ring" && <ColorInput label="Ring colour" value={project.cursor.highlightColor} onChange={(v) => set("cursor:hlcolor", (p) => void (p.cursor.highlightColor = v))} />}
+          </>
+        )}
         <Slider label="Size" value={project.cursor.size} min={0.6} max={4} step={0.05} format={(v) => `${v.toFixed(2)}×`} onChange={(v) => set("cursor:size", (p) => void (p.cursor.size = v))} />
         <Slider label="Smoothing" value={project.cursor.smoothing} min={0} max={1} format={pct} onChange={(v) => set("cursor:smooth", (p) => void (p.cursor.smoothing = v))} />
         <Toggle label="Click ripples" value={project.cursor.ripples} onChange={(v) => set("cursor:ripples", (p) => void (p.cursor.ripples = v))} />

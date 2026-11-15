@@ -2,8 +2,9 @@
 // compositor (`render.rs`): change them in both places or the preview stops
 // being WYSIWYG.
 
-import { coverRect, frameRect, gradientLine, mapPoint, unitScale, viewRect, webcamBox, type Box } from "../lib/layout";
+import { clipLayout, coverRect, gradientLine, mapPoint, unitScale, viewOf, webcamBox, type Box, type FrameLayout } from "../lib/layout";
 import type { Annotation, Background, CaptionLine, CardClip, MotionTracks, Project, RecordingClip, TransitionKind, TransitionMark } from "../lib/types";
+import { drawDeviceBody, drawDeviceOver, roundedCornersPath } from "./device";
 import { CENTER_BASELINE, FIRST_BASELINE, LINE_HEIGHT, drawText, measure, type TextStyle } from "./text";
 
 /** What the renderer needs for one clip. */
@@ -32,6 +33,52 @@ const ARROW: [number, number][] = [
 ];
 
 export const RIPPLE_MS = 500;
+export const BLUR_PX_PER_SAMPLE = 2.5;
+export const BLUR_MAX_SAMPLES = 12;
+
+/** Opacity of each of `n` cursor copies drawn for motion blur. */
+export const trailAlpha = (n: number) => (n <= 1 ? 1 : 2 / (n + 1));
+
+/**
+ * Camera states and cursor positions across the shutter of frame `i`; each
+ * empty when it moves too little to blur. Mirrors `blur_samples` in Rust.
+ */
+export function blurSamples(m: MotionTracks, i: number, strength: number, frameW: number, viewW: number): { cams: [number, number, number][]; trail: [number, number][] } {
+  const none = { cams: [], trail: [] };
+  if (strength <= 0 || m.frames < 2 || i >= m.frames) return none;
+  const clip = m.clip[i];
+  let lo = i;
+  let hi = i;
+  while (lo > 0 && m.clip[lo - 1] === clip && i - lo < 2) lo--;
+  while (hi + 1 < m.frames && m.clip[hi + 1] === clip && hi - i < 2) hi++;
+  const at = (f: number, get: (j: number) => number[]) => {
+    const g = Math.min(hi, Math.max(lo, f));
+    const a = Math.floor(g);
+    const b = Math.min(Math.ceil(g), hi);
+    const t = g - a;
+    const va = get(a);
+    const vb = get(b);
+    return va.map((x, k) => x + (vb[k] - x) * t);
+  };
+  const cam = (j: number) => [m.cam[j * 3], m.cam[j * 3 + 1], m.cam[j * 3 + 2]];
+  const cur = (j: number) => [m.cursor[j * 4], m.cursor[j * 4 + 1]];
+  const f0 = i - strength / 2;
+  const f1 = i + strength / 2;
+  const samples = (n: number, get: (j: number) => number[]) => Array.from({ length: n }, (_, k) => at(f0 + ((f1 - f0) * (k + 0.5)) / n, get));
+  const count = (d: number) => Math.min(BLUR_MAX_SAMPLES, Math.ceil(d / BLUR_PX_PER_SAMPLE));
+  const a = at(f0, cam);
+  const b = at(f1, cam);
+  const k = (frameW * Math.max(1, Math.max(a[2], b[2]))) / viewW;
+  const pan = Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])) * k;
+  const zoom = (Math.abs(a[2] - b[2]) / Math.max(a[2], b[2])) * (frameW / 2);
+  const n = count(Math.max(pan, zoom));
+  const cams = n >= 2 ? samples(n, cam).map((v) => [v[0], v[1], v[2]] as [number, number, number]) : [];
+  const ca = at(f0, cur);
+  const cb = at(f1, cur);
+  const nc = count((Math.hypot(ca[0] - cb[0], ca[1] - cb[1]) * k) / 1.6);
+  const trail = nc >= 2 ? samples(nc, cur).map((v) => [v[0], v[1]] as [number, number]) : [];
+  return { cams, trail };
+}
 export const ANNOTATION_FADE_MS = 180;
 export const KEY_FADE_IN_MS = 90;
 export const KEY_FADE_OUT_MS = 260;
@@ -54,6 +101,45 @@ export function roundedRectPath(ctx: Ctx, b: Box, radius: number) {
   ctx.arcTo(b.x, b.y + b.h, b.x, b.y, r);
   ctx.arcTo(b.x, b.y, b.x + b.w, b.y, r);
   ctx.closePath();
+}
+
+/** One cursor with its tip (or hotspot) at (x, y), `h` tall. */
+function drawPointer(ctx: Ctx, style: string, image: HTMLImageElement | null, hx: number, hy: number, x: number, y: number, h: number, alpha: number) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (image && image.naturalHeight > 0) {
+    const k = h / image.naturalHeight;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(image, x - hx * image.naturalWidth * k, y - hy * image.naturalHeight * k, image.naturalWidth * k, h);
+  } else if (style === "dot") {
+    ctx.beginPath();
+    ctx.arc(x, y, 0.3 * h, 0, Math.PI * 2);
+    ctx.globalAlpha = 0.55 * alpha;
+    ctx.fillStyle = "#000";
+    ctx.fill();
+    ctx.globalAlpha = 0.9 * alpha;
+    ctx.lineWidth = 0.07 * h;
+    ctx.strokeStyle = "#fff";
+    ctx.stroke();
+  } else {
+    const light = style === "light";
+    ctx.beginPath();
+    ARROW.forEach(([px, py], k) => (k ? ctx.lineTo(x + px * h, y + py * h) : ctx.moveTo(x + px * h, y + py * h)));
+    ctx.closePath();
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 0.07 * h;
+    ctx.strokeStyle = light ? "#000" : "#fff";
+    ctx.shadowColor = "rgba(0,0,0,0.35)";
+    ctx.shadowBlur = 0.22 * h;
+    ctx.shadowOffsetY = 0.06 * h;
+    ctx.stroke();
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.fillStyle = light ? "#fff" : "#000";
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function fillRounded(ctx: Ctx, b: Box, radius: number, color: string, alpha = 1) {
@@ -162,11 +248,11 @@ export class Renderer {
   private bufA: HTMLCanvasElement | null = null;
   private bufB: HTMLCanvasElement | null = null;
 
-  /** Background, optionally with the shadow of a frame baked in. */
-  private staticLayer(W: number, H: number, s: number, bg: Background, shadow: number, frame: Box | null, radius: number, assets: RenderAssets): HTMLCanvasElement {
+  /** Background, optionally with a frame's shadow and device baked in. */
+  private staticLayer(W: number, H: number, s: number, bg: Background, shadow: number, layout: FrameLayout | null, device: { title: string; dark: boolean } | null, assets: RenderAssets): HTMLCanvasElement {
     const path = backdropPath(bg);
     const image = path ? assets.backdrop(path) : null;
-    const key = JSON.stringify([W, H, bg, frame ? [shadow, radius, frame] : null, image !== null]);
+    const key = JSON.stringify([W, H, bg, layout ? [shadow, layout, device] : null, image !== null]);
     const cached = this.layers.get(key);
     if (cached) return cached;
     // Sizes and settings change rarely; a handful of layers covers a project.
@@ -176,16 +262,17 @@ export class Renderer {
     layer.height = H;
     const ctx = layer.getContext("2d")!;
     drawBackground(ctx, W, H, s, bg, image);
-    if (frame && shadow > 0) {
+    if (layout && shadow > 0) {
       ctx.save();
       ctx.shadowColor = `rgba(0,0,0,${Math.min(1, shadow * 0.6)})`;
       ctx.shadowBlur = 40 * s;
       ctx.shadowOffsetY = 16 * s;
       ctx.fillStyle = "#000";
-      roundedRectPath(ctx, frame, radius);
+      roundedRectPath(ctx, layout.body, layout.bodyRadius);
       ctx.fill();
       ctx.restore();
     }
+    if (layout && device) drawDeviceBody(ctx, layout, device, s);
     this.layers.set(key, layer);
     return layer;
   }
@@ -232,13 +319,13 @@ export class Renderer {
     ctx.globalCompositeOperation = "source-over";
 
     if (clip?.kind === "card") {
-      ctx.drawImage(this.staticLayer(W, H, s, clip.background ?? project.frame.background, 0, null, 0, assets), 0, 0);
+      ctx.drawImage(this.staticLayer(W, H, s, clip.background ?? project.frame.background, 0, null, null, assets), 0, 0);
       const local = t - (motion?.clipStarts[clipIndex] ?? 0);
       drawCard(ctx, W, H, s, project, clip, local);
     } else if (clip) {
       this.drawRecording(ctx, W, H, s, project, clip, clipIndex, motion, i, t, outMs, assets);
     } else {
-      ctx.drawImage(this.staticLayer(W, H, s, project.frame.background, 0, null, 0, assets), 0, 0);
+      ctx.drawImage(this.staticLayer(W, H, s, project.frame.background, 0, null, null, assets), 0, 0);
     }
 
     if (!motion || i < 0) return;
@@ -272,18 +359,20 @@ export class Renderer {
 
   private drawRecording(ctx: Ctx, W: number, H: number, s: number, project: Project, clip: RecordingClip, clipIndex: number, motion: MotionTracks | null, i: number, t: number, outMs: number, assets: RenderAssets) {
     const crop = clip.crop;
-    const frame = frameRect(W, H, project.frame.padding, crop);
-    const radius = project.frame.radius * s;
-    ctx.drawImage(this.staticLayer(W, H, s, project.frame.background, project.frame.shadow, frame, radius, assets), 0, 0);
+    const layout = clipLayout(W, H, project, crop);
+    const frame = layout.frame;
+    const device = project.frame.device ?? { kind: "none", title: "", dark: true };
+    ctx.drawImage(this.staticLayer(W, H, s, project.frame.background, project.frame.shadow, layout, device, assets), 0, 0);
 
     const cx = i >= 0 ? motion!.cam[i * 3] : crop.x + crop.width / 2;
     const cy = i >= 0 ? motion!.cam[i * 3 + 1] : crop.y + crop.height / 2;
     const scale = i >= 0 ? Math.max(1, motion!.cam[i * 3 + 2]) : 1;
-    const view = viewRect(crop, cx, cy, scale);
+    const view = viewOf(layout, cx, cy, scale);
     const unit = s * Math.sqrt(scale);
+    const blur = project.motionBlur?.enabled && motion && i >= 0 ? blurSamples(motion, i, project.motionBlur.strength, frame.w, layout.viewW) : { cams: [], trail: [] };
 
     ctx.save();
-    roundedRectPath(ctx, frame, radius);
+    roundedCornersPath(ctx, frame, layout.radii);
     ctx.clip();
     ctx.fillStyle = "#000";
     ctx.fillRect(frame.x, frame.y, frame.w, frame.h);
@@ -291,11 +380,19 @@ export class Renderer {
     if (source) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
-      try {
-        ctx.drawImage(source, view.x, view.y, view.w, view.h, frame.x, frame.y, frame.w, frame.h);
-      } catch {
-        // Video not ready yet.
-      }
+      // Motion blur averages the frame over the shutter: copy k is drawn at
+      // 1/(k+1), which leaves every copy weighted equally.
+      const cams: [number, number, number][] = blur.cams.length >= 2 ? blur.cams : [[cx, cy, scale]];
+      cams.forEach(([x, y, sc], k) => {
+        const v = viewOf(layout, x, y, sc);
+        ctx.globalAlpha = 1 / (k + 1);
+        try {
+          ctx.drawImage(source, v.x, v.y, v.w, v.h, frame.x, frame.y, frame.w, frame.h);
+        } catch {
+          // Video not ready yet.
+        }
+      });
+      ctx.globalAlpha = 1;
     }
 
     for (const a of project.annotations) {
@@ -323,27 +420,36 @@ export class Renderer {
       const alpha = motion.cursor[i * 4 + 2];
       if (project.cursor.show && alpha > 0.003) {
         const press = motion.cursor[i * 4 + 3];
+        const c = project.cursor;
         const tip = mapPoint(frame, view, motion.cursor[i * 4], motion.cursor[i * 4 + 1]);
-        const h = 26 * project.cursor.size * unit * (1 - 0.15 * press);
-        ctx.beginPath();
-        ARROW.forEach(([x, y], k) => (k ? ctx.lineTo(tip.x + x * h, tip.y + y * h) : ctx.moveTo(tip.x + x * h, tip.y + y * h)));
-        ctx.closePath();
-        ctx.globalAlpha = alpha;
-        ctx.lineJoin = "round";
-        ctx.lineWidth = 0.07 * h;
-        ctx.strokeStyle = "#fff";
-        ctx.shadowColor = "rgba(0,0,0,0.35)";
-        ctx.shadowBlur = 0.22 * h;
-        ctx.shadowOffsetY = 0.06 * h;
-        ctx.stroke();
-        ctx.shadowColor = "transparent";
-        ctx.shadowBlur = 0;
-        ctx.shadowOffsetY = 0;
-        ctx.fillStyle = "#000";
-        ctx.fill();
-        ctx.globalAlpha = 1;
+        if (c.highlight === "spotlight" || c.highlight === "ring") {
+          const r = c.highlightSize * unit;
+          ctx.beginPath();
+          if (c.highlight === "spotlight") {
+            ctx.rect(frame.x, frame.y, frame.w, frame.h);
+            ctx.arc(tip.x, tip.y, r, 0, Math.PI * 2, true);
+            ctx.fillStyle = `rgba(0,0,0,${0.5 * alpha})`;
+            ctx.fill("evenodd");
+          } else {
+            ctx.arc(tip.x, tip.y, r, 0, Math.PI * 2);
+            ctx.globalAlpha = 0.28 * alpha;
+            ctx.fillStyle = c.highlightColor;
+            ctx.fill();
+            ctx.globalAlpha = 0.9 * alpha;
+            ctx.lineWidth = 3 * s;
+            ctx.strokeStyle = c.highlightColor;
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+          }
+        }
+        const h = 26 * c.size * unit * (1 - 0.15 * press);
+        const trail = blur.trail.length >= 2 ? blur.trail.map(([x, y]) => mapPoint(frame, view, x, y)) : [tip];
+        const a = alpha * trailAlpha(trail.length);
+        const image = c.style === "image" && c.image ? assets.backdrop(c.image) : null;
+        for (const p of trail) drawPointer(ctx, c.style, image, c.hotspotX, c.hotspotY, p.x, p.y, h, a);
       }
     }
+    drawDeviceOver(ctx, layout);
     ctx.restore();
   }
 
@@ -609,7 +715,8 @@ export function frameGeometry(W: number, H: number, project: Project, motion: Mo
   const clipIndex = i >= 0 ? motion!.clip[i] : project.clips.findIndex((c) => c.kind === "recording");
   const clip = project.clips[clipIndex];
   if (!clip || clip.kind !== "recording") return null;
-  const frame = frameRect(W, H, project.frame.padding, clip.crop);
-  const view = i >= 0 ? viewRect(clip.crop, motion!.cam[i * 3], motion!.cam[i * 3 + 1], Math.max(1, motion!.cam[i * 3 + 2])) : viewRect(clip.crop, clip.crop.x + clip.crop.width / 2, clip.crop.y + clip.crop.height / 2, 1);
-  return { clipIndex, frame, view };
+  const layout = clipLayout(W, H, project, clip.crop);
+  const c = clip.crop;
+  const view = i >= 0 ? viewOf(layout, motion!.cam[i * 3], motion!.cam[i * 3 + 1], Math.max(1, motion!.cam[i * 3 + 2])) : viewOf(layout, c.x + c.width / 2, c.y + c.height / 2, 1);
+  return { clipIndex, frame: layout.frame, view };
 }

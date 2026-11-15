@@ -2,6 +2,9 @@
 
 import type { Cut, ZoomSegment } from "./types";
 
+/** Anything laid out on the timeline as non-overlapping segments. */
+export type Segment = Pick<ZoomSegment, "id" | "startMs" | "endMs">;
+
 const EPS = 1;
 
 /** Sort, clamp to [0, duration], merge overlapping/adjacent cuts, drop empty ones. */
@@ -102,7 +105,7 @@ export function setTrimEnd(cuts: Cut[], ms: number, durationMs: number): Cut[] {
 export const MIN_ZOOM_MS = 300;
 
 /** Free range around a segment (or around a point when `id` is not in the list). */
-export function zoomBounds(zooms: ZoomSegment[], id: string | null, atMs: number, durationMs: number): { min: number; max: number } {
+export function zoomBounds(zooms: Segment[], id: string | null, atMs: number, durationMs: number): { min: number; max: number } {
   let min = 0;
   let max = durationMs;
   const self = id ? zooms.find((z) => z.id === id) : undefined;
@@ -117,7 +120,7 @@ export function zoomBounds(zooms: ZoomSegment[], id: string | null, atMs: number
 }
 
 /** Move a segment by `deltaMs` without overlapping its neighbours. */
-export function moveZoom(zooms: ZoomSegment[], id: string, startMs: number, durationMs: number): { startMs: number; endMs: number } | null {
+export function moveZoom(zooms: Segment[], id: string, startMs: number, durationMs: number): { startMs: number; endMs: number } | null {
   const z = zooms.find((s) => s.id === id);
   if (!z) return null;
   const len = z.endMs - z.startMs;
@@ -128,7 +131,7 @@ export function moveZoom(zooms: ZoomSegment[], id: string, startMs: number, dura
 
 /** Resize one edge of a segment, keeping a minimum length and no overlap. */
 export function resizeZoom(
-  zooms: ZoomSegment[],
+  zooms: Segment[],
   id: string,
   edge: "start" | "end",
   ms: number,
@@ -142,7 +145,7 @@ export function resizeZoom(
 }
 
 /** Range for a new segment centred near `atMs`, or null when there is no room. */
-export function newZoomRange(zooms: ZoomSegment[], atMs: number, durationMs: number, lengthMs = 2500): { startMs: number; endMs: number } | null {
+export function newZoomRange(zooms: Segment[], atMs: number, durationMs: number, lengthMs = 2500): { startMs: number; endMs: number } | null {
   const { min, max } = zoomBounds(zooms, null, atMs, durationMs);
   if (max - min < MIN_ZOOM_MS) return null;
   const len = Math.min(lengthMs, max - min);
