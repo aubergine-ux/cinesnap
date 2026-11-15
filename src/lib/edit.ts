@@ -79,6 +79,7 @@ export function shiftFrom(p: Project, atMs: number, deltaMs: number): void {
     }
   }
   for (const k of p.webcamKeys) k.atMs = moved(k.atMs);
+  for (const m of p.markers) m.atMs = moved(m.atMs);
   if (p.transcript) for (const w of p.transcript.words) if (w.t0 >= atMs - EPS) [w.t0, w.t1] = [w.t0 + deltaMs, w.t1 + deltaMs];
 }
 
@@ -125,6 +126,7 @@ export function removeClip(p: Project, index: number): boolean {
   p.zooms = p.zooms.filter((z) => z.startMs < a || z.startMs >= b);
   p.annotations = p.annotations.filter((x) => x.startMs < a || x.startMs >= b);
   p.webcamKeys = p.webcamKeys.filter((k) => k.atMs < a || k.atMs >= b);
+  p.markers = p.markers.filter((m) => m.atMs < a || m.atMs >= b);
   if (p.transcript) p.transcript.words = p.transcript.words.filter((w) => w.t0 < a || w.t0 >= b);
   p.clips.splice(index, 1);
   shiftFrom(p, b, a - b);
@@ -166,6 +168,7 @@ export function moveClip(p: Project, from: number, to: number): void {
   p.zooms = p.zooms.map(range).sort((a, b) => a.startMs - b.startMs);
   p.annotations = p.annotations.map(range).sort((a, b) => a.startMs - b.startMs);
   p.webcamKeys = p.webcamKeys.map((k) => ({ ...k, atMs: point(k.atMs) })).sort((a, b) => a.atMs - b.atMs);
+  p.markers = p.markers.map((m) => ({ ...m, atMs: point(m.atMs) })).sort((a, b) => a.atMs - b.atMs);
   if (p.transcript) {
     p.transcript.words = p.transcript.words
       .map((w) => {
