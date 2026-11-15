@@ -1,19 +1,36 @@
 //! Core of Cinesnap: the project format, the motion model, the frame
 //! compositor and the export pipeline. Nothing here depends on the GUI.
 
+pub mod activity;
+pub mod audio;
 pub mod cli;
+pub mod clips;
+pub mod device;
 pub mod events;
 pub mod export;
 pub mod ffmpeg;
 pub mod layout;
+pub mod migrate;
 pub mod motion;
+pub mod music;
+pub mod presets;
 pub mod project;
 pub mod render;
+pub mod share;
 pub mod synth;
+pub mod text;
+pub mod tonemap;
+pub mod transcribe;
+pub mod transcript;
 
 #[cfg(test)]
 pub(crate) mod testutil {
     use crate::project::*;
+
+    /// ffmpeg for tests that need it; they pass quietly without it.
+    pub fn ffmpeg() -> Option<std::path::PathBuf> {
+        crate::ffmpeg::locate(None)
+    }
 
     pub fn project(width: u32, height: u32, duration_ms: f64) -> Project {
         Project::new(
@@ -24,8 +41,11 @@ pub(crate) mod testutil {
                     height,
                     fps: 60.0,
                     duration_ms,
+                    vfr: false,
+                    hdr: None,
                 },
                 mic: None,
+                system: None,
                 webcam: None,
                 events: FileRef {
                     file: EVENTS_FILE.into(),

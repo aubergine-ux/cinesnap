@@ -61,8 +61,9 @@ observing it. What is available:
      centre) unless a compositor-specific source exists. The UI says so.
 2. **Clicks and key activity — `evdev`.** Reading `/dev/input/event*` works
    below the compositor on any session type, but needs membership of the
-   `input` group (or a udev rule). Cinesnap only records *that* a button or key
-   went down and when; it never records which key.
+   `input` group (or a udev rule). Cinesnap records *that* a button or key
+   went down and when. Typed characters are never recorded; only shortcuts
+   and action keys get a label (see [Keystrokes](#keystrokes-and-privacy)).
 3. **No `evdev` access → inferred clicks.** A dwell detector marks a click
    candidate when the cursor decelerates to a stop and stays within a few
    pixels for 350 ms after a deliberate move. It is less precise than real
@@ -118,9 +119,41 @@ runs a `showinfo` filter; the moment its first log line appears is taken as
 that track's first sample, which is how tracks started by different processes
 are aligned without a shared clock inside the files.
 
-While recording, the app window minimises itself. When it comes back to the
-front (to press Stop), that moment is remembered and the tail of the recording
-after it is cut by default — as an ordinary, undoable cut.
+**System sound** is its own track, so it can be turned down or muted without
+touching the voice. Linux records a PulseAudio/PipeWire monitor with ffmpeg;
+Windows (WASAPI loopback) and macOS 14.6+ (Core Audio taps) go through
+`cpal`. **One app's sound** comes from its own PipeWire stream on Linux and
+from process loopback on Windows 10 2004+. Loopback sources deliver nothing
+while nothing plays, so they are written through a gap-filling writer
+(`recorder/tape.rs`) that inserts the silence from the capture instants.
+
+**Variable frame rate.** With "skip unchanged frames" on, `mpdecimate` drops
+frames identical to the one before, keeping at least four a second. It runs
+after the conversion to the encoder's pixel format, which happens anyway, so
+it costs about 0.1 ms per 4K frame instead of the 3 ms it costs on packed RGB.
+
+**HDR screens** (Windows) are captured in 10 bit and converted with two 1D
+lookup tables and a matrix (`cinesnap_core::tonemap`): PQ to linear light at
+the screen's own SDR white level, BT.2020 to BT.709, linear to sRGB. SDR
+content comes out within one 8-bit step of an SDR capture; brighter
+highlights clip. It is about 2.5x cheaper than ffmpeg's `zscale`/`tonemap`
+chain and needs no optional ffmpeg libraries.
+
+**Sessions and segments.** A recording session is made of segments. Pausing
+stops every capture process, so nothing is recorded while paused; resuming
+starts a new segment (on Wayland the PipeWire stream stays open, so the
+picker does not come back). Switching screens starts the new segment before
+stopping the old one and cuts the overlap. When stopped, the segments become
+clips joined by plain cuts, and the countdown, the switch overlaps and the
+reach for the stop button become ordinary, undoable cuts.
+
+**Control bar and hotkeys.** A small always-on-top window shows the time
+and the controls. Windows (`WDA_EXCLUDEFROMCAPTURE`) and macOS (sharing type
+none) leave it out of the recording; Linux cannot, so the bar goes to a
+screen that is not being recorded, or is shown only for the countdown.
+Global hotkeys (start/stop, pause, marker) use the global-shortcut plugin,
+and the GlobalShortcuts portal on Wayland, where the desktop owns the keys.
+Cinesnap's own hotkeys are left out of the keystroke overlay.
 
 Video, audio, webcam and input are recorded as independent tracks into a
 project bundle (see [recording-format.md](recording-format.md)). The video is
@@ -131,7 +164,9 @@ a visually lossless H.264 intermediate with the cursor hidden. Nothing is
 
 All motion logic lives in Rust (`motion/`):
 
-- **Auto-zoom** turns the event log into zoom segments.
+- **Auto-zoom** turns the event log (and, once analysed, where the screen
+  changes) into zoom segments.
+- **Reframing** places the window of a reframed recording.
 - **Camera path** turns zoom segments into a camera (centre + scale) per frame,
   with spring-like easing and cursor following inside a segment.
 - **Cursor smoothing** turns raw samples into the drawn cursor path.
@@ -142,6 +177,39 @@ The frontend never reimplements this. After each edit it calls
 the `<video>` element. Export uses the same tracks with a Rust compositor. The
 two renderers only share *drawing* rules (rounded rect, shadow, background),
 which are simple; the hard-to-get-right *motion* cannot drift apart.
+
+### Effects
+
+**Where things change on screen.** Each recording is decoded once, in the
+background, at 240 pixels wide and ten frames a second; every step records
+the share of the picture that changed and the box around it
+(`activity.rs`, cached in `cache/`). The cursor is not in the video, so
+what is left is content: text appearing, a terminal scrolling. Typing
+zooms anchor on the small, local changes that follow key presses (the
+text cursor) instead of the last click, and the camera follows them while
+typing. The export runs the same analysis if it is missing, so it always
+matches the preview.
+
+**Reframing.** With "fill the shape", a vertical or square output of a wide
+recording shows a window of the output's shape instead of the whole
+recording with bars. The window follows the cursor with a dead zone and
+heavy, lag-free smoothing; while the mouse rests it follows what changes
+on screen. Manual frame segments pin it, easing in and out
+(`motion/reframe.rs`). For the camera this is only a different resting
+centre and view size, so zooms work inside a reframed video unchanged.
+
+**Motion blur** averages what the shutter would see: the recording is
+drawn at camera states spread over the shutter interval and averaged, and
+the cursor is drawn as a fading trail. The number of samples follows how
+far the picture moves in output pixels (none for a still frame, up to 12),
+so it costs nothing when nothing moves. The canvas preview does the same
+with `globalAlpha` (copy *k* at 1/(*k*+1)).
+
+**Device frames** (browser and desktop windows, laptop, phone) are part of
+the layout: their insets are taken from the padded space before the
+recording is fitted, so a frame never overflows, and they are drawn as
+vectors by both renderers from the same numbers (`device.rs`,
+`src/render/device.ts`).
 
 ### Export
 
@@ -157,8 +225,87 @@ ffmpeg (decode, kept ranges only) ──raw RGBA──▶ compositor ──raw R
   in two passes with a per-video palette (`palettegen` / `paletteuse` with
   rectangle diffing) for small, clean README GIFs.
 
-The export path is also exposed as a CLI (`cinesnap render <project> -o out.mp4`, or the GUI-free `cinesnap-cli` binary)
+The export path is also exposed as a CLI (`cinesnap render <project> --preset readme`, or the GUI-free `cinesnap-cli` binary)
 which is what the test suite and the README demo video use.
+
+### The timeline
+
+A project is a list of clips: recordings and cards. Recordings added later
+are copied (hard-linked where possible) into `clips/<id>/` inside the bundle,
+so a project stays one self-contained folder. Edit state lives in *timeline
+time*, the clips laid end to end; the per-recording motion code never sees
+more than one clip, because `Project::local` hands it a single-recording view
+with the cuts and zooms that fall inside that clip shifted to its own time.
+
+Transitions do not overlap clips. A blend is centred on the join; the clip
+that is not playing is rendered frozen on its first or last frame and the two
+finished frames are mixed (`blend_transition`). Output time therefore stays a
+simple function of the cuts, and audio needs no special handling.
+
+Cards, annotations, the keystroke overlay and captions are drawn by the same
+two renderers as everything else. Text is the one place where a browser and
+a rasteriser disagree by default, so both sides lay text out the same
+deliberately plain way: bundled fonts only, glyphs placed by advance width
+(no kerning or ligatures), and vertical positions that never depend on font
+metrics. `text.rs` and `src/render/text.ts` are that agreement.
+
+### Keystrokes and privacy
+
+The keystroke overlay needs to know which shortcut was pressed, which is at
+odds with never recording keys. The rule (`events::shortcut`) is: a key gets
+a label only if Ctrl, Alt or the OS key is held with it, or if it is an
+action key (Enter, Esc, Tab, arrows, function keys…). Letters, digits and
+punctuation typed on their own or with Shift are logged as "a key went down"
+and nothing more, so typed text, passwords included, cannot be reconstructed
+from a recording. Labelling can be switched off before recording.
+
+### Sound
+
+```
+mic.wav ──ffmpeg: align · denoise · EQ · loudness──▶ cache/voice-<clip>.wav   (per recording, clip time)
+                                                             │
+music (built-in synth or a file) ──▶ cache/music-*.wav       ▼
+                                          └──────▶ mixer (Rust): cuts · loop · duck ──▶ soundtrack.wav
+```
+
+Each microphone track is cleaned up once by ffmpeg and cached. The mixer then
+walks the output timeline in Rust: it splices the voice at the cuts with 6 ms
+fades (no clicks), loops the music, and lowers it under speech using a gain
+envelope computed from the voice level, with a little lookahead so the music
+is already down when a sentence starts. The export muxes that file; the
+editor plays the very same file for the preview, rebuilt in the background
+whenever an edit changes it.
+
+The built-in music is synthesised by `music.rs`, so there are no audio assets
+in the repository and nothing to license.
+
+### Speech
+
+Captions come from whisper.cpp, linked into the binary (`whisper` cargo
+feature, on by default). The model file is downloaded once into the app's
+data folder; after that nothing touches the network. Whisper is asked for one
+word per segment, which gives word timings for free. Those timings drive the
+karaoke captions, and they are what makes "delete a word, cut the video"
+work: a transcript edit is just a cut over that word's time range, so it is
+undoable like any other cut. Filler words come from the transcript; silences
+come from the level of the cleaned-up voice track, relative to how loud the
+speech is.
+
+Long jobs (model download, transcription, soundtrack, upload, export) report
+progress on one event channel and each has a cancel flag.
+
+### Getting videos out
+
+Export presets (`presets.rs`) carry a size rule, an optional frame rate and
+aspect ratio, and an optional byte limit. For small limits (GitHub's 10 MB)
+the frames are rendered once to a lossless intermediate and encoded as often
+as it takes to fit: first at the chosen quality, then at whatever bitrate the
+limit allows; GIFs step down in colours, size and frame rate.
+
+The share server (`share-server/`) is a separate, dependency-free Node
+program; the app and CLI upload to it with a bearer token. Scripted demos
+(`scripted/`) drive a browser with Playwright and write an ordinary
+recording bundle, so the rest of the pipeline does not know the difference.
 
 ## 3. Auto-zoom algorithm
 
@@ -180,9 +327,13 @@ it is marked `manual` and survives regeneration.
 
 ## 4. Frontend
 
-React + Vite + TypeScript, state in a single store with undo/redo. Layout: a
-large preview, a timeline docked at the bottom (zoom track, cut track,
-playhead), and a collapsible settings panel on the right. The preview is a 2D
+React + Vite + TypeScript, state in a single store with undo/redo. Every edit
+is a change to the project object, which is what makes undo cover everything
+and autosave trivial: 400 ms after the last change the project is written
+(atomically, with a backup), and again when the window is hidden or closed.
+Layout: a large preview with handles for annotations and the webcam bubble, a
+timeline docked at the bottom (clips, notes, webcam keyframes, zooms, cuts),
+and a tabbed settings panel on the right. The preview is a 2D
 canvas composited from the `<video>` element each animation frame.
 
 ## 5. Testing
@@ -190,5 +341,10 @@ canvas composited from the `<video>` element each animation frame.
 - `motion/` and `project/` are pure and unit tested.
 - The compositor and export pipeline are tested end to end against a synthetic
   recording (ffmpeg test pattern plus a generated event log).
+- The project file is written by the frontend and read by the core, so a
+  fixture that uses every editor feature is checked from both sides
+  (`src/lib/contract.test.ts`, `tests/contract.rs`).
+- The share server and the scripted-demo runner have their own test suites
+  (`npm test` in each folder).
 - Capture backends are thin by design. Linux backends are exercised manually;
   Windows and macOS are build-verified in CI.

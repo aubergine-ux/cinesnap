@@ -1,0 +1,19 @@
+name: cinesnap-share
+
+services:
+  share:
+    build: .
+    image: cinesnap-share
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # fixed inside the container, HOST_PORT in .env picks the port on the host
+      PORT: "8080"
+      DATA_DIR: /data
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    volumes:
+      - share-data:/data
+
+volumes:
+  share-data:

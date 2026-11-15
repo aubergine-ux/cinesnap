@@ -1,0 +1,44 @@
+# A scripted demo of the little site in ./site.
+#
+#   cd scripted && npm install
+#   node bin/cinesnap-script.mjs run ../examples/demo.yml --render /tmp/demo.gif
+#
+# See docs/scripted-demos.md for every option.
+
+name: Orbit quick tour
+viewport: { width: 1280, height: 720 }
+fps: 30
+
+# Serve ./site on a free local port; `open` paths are relative to it.
+serve: { dir: site }
+
+style:
+  frame: { padding: 0.05 }
+
+steps:
+  - open: /
+  - wait: 700
+
+  # Create a project from the side panel.
+  - click: "#new"
+  - type: { into: "#name", text: "Launch checklist", delay: 70 }
+  - select: { from: "#kind", option: "Website" }
+  - check: "#private"
+  - wait: 300
+  - click: "#create"
+  - waitFor: ".toast.show"
+  - wait: 1200
+
+  # Look around.
+  - hover: ".card >> nth=4"
+  - scroll: { y: 260 }
+  - wait: 600
+
+  # Command palette from the keyboard.
+  - press: Control+K
+  - waitFor: "#palette.show"
+  - hover: "#query"
+  - type: { text: "theme", delay: 90 }
+  - wait: 400
+  - press: Enter
+  - wait: 1800

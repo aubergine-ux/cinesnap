@@ -62,23 +62,99 @@ fn progress(z: &Zoom, t: f64) -> f64 {
     ease(z.easing, a.min(b))
 }
 
-pub fn camera_path(
-    zooms: &[Zoom],
-    cursor: &CursorPath,
-    crop: Rect,
-    duration_ms: f64,
-) -> CameraPath {
-    let n = grid_len(duration_ms);
-    let (ccx, ccy) = crop.center();
-    let mut cx = vec![ccx; n];
-    let mut cy = vec![ccy; n];
-    let mut scale = vec![1.0; n];
+/// What the camera shows when it is not zooming.
+#[derive(Clone, Copy, Debug)]
+pub struct View<'a> {
+    pub crop: Rect,
+    /// Size of the source visible at zoom 1.
+    pub width: f64,
+    pub height: f64,
+    /// Centre at zoom 1, per grid step (reframing). Empty: the crop centre.
+    pub rest_x: &'a [f64],
+    pub rest_y: &'a [f64],
+}
 
-    // The camera follows a calmer version of the cursor than the one drawn.
+impl View<'static> {
+    /// The whole crop, always.
+    pub fn whole(crop: Rect) -> Self {
+        Self {
+            crop,
+            width: crop.width,
+            height: crop.height,
+            rest_x: &[],
+            rest_y: &[],
+        }
+    }
+}
+
+impl View<'_> {
+    fn rest(&self, i: usize) -> (f64, f64) {
+        match (self.rest_x.get(i), self.rest_y.get(i)) {
+            (Some(&x), Some(&y)) => (x, y),
+            _ => self.crop.center(),
+        }
+    }
+
+    /// Move a centre so a view at `scale` stays inside the crop.
+    pub fn clamp(&self, x: f64, y: f64, scale: f64) -> (f64, f64) {
+        let c = self.crop;
+        let (hw, hh) = (
+            (self.width / scale / 2.0).min(c.width / 2.0),
+            (self.height / scale / 2.0).min(c.height / 2.0),
+        );
+        (
+            x.clamp(c.x + hw, c.x + c.width - hw),
+            y.clamp(c.y + hh, c.y + c.height - hh),
+        )
+    }
+}
+
+/// The calmer version of the cursor that the camera follows.
+pub fn calm(cursor: &CursorPath) -> (Vec<f64>, Vec<f64>) {
     let mut fx = cursor.x.clone();
     let mut fy = cursor.y.clone();
     smooth_zero_phase(&mut fx, 220.0);
     smooth_zero_phase(&mut fy, 220.0);
+    (fx, fy)
+}
+
+/// What the camera follows inside a zoom, per grid step: a calm version
+/// of the target, and the target itself, which it must never lose.
+pub struct Follow {
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub keep_x: Vec<f64>,
+    pub keep_y: Vec<f64>,
+}
+
+impl Follow {
+    /// Follow the cursor.
+    pub fn cursor(cursor: &CursorPath) -> Self {
+        let (x, y) = calm(cursor);
+        Self {
+            x,
+            y,
+            keep_x: cursor.x.clone(),
+            keep_y: cursor.y.clone(),
+        }
+    }
+}
+
+/// The camera for a recording: at rest it shows `view`; inside zoom
+/// segments it moves towards their focus, following `follow` in follow
+/// mode.
+pub fn camera_path(zooms: &[Zoom], follow: &Follow, view: &View, duration_ms: f64) -> CameraPath {
+    let n = grid_len(duration_ms);
+    let mut cx = Vec::with_capacity(n);
+    let mut cy = Vec::with_capacity(n);
+    for i in 0..n {
+        let (x, y) = view.rest(i);
+        cx.push(x);
+        cy.push(y);
+    }
+    let mut scale = vec![1.0; n];
+    let (fx, fy) = (&follow.x, &follow.y);
+    let (kx, ky) = (&follow.keep_x, &follow.keep_y);
 
     for z in zooms {
         if z.scale <= 1.0 || z.end_ms <= z.start_ms {
@@ -86,7 +162,14 @@ pub fn camera_path(
         }
         let i0 = (z.start_ms / STEP_MS).floor().max(0.0) as usize;
         let i1 = ((z.end_ms / STEP_MS).ceil() as usize).min(n - 1);
-        let (view_w, view_h) = (crop.width / z.scale, crop.height / z.scale);
+        if i0 > i1
+            || [fx.len(), fy.len(), kx.len(), ky.len()]
+                .iter()
+                .any(|&l| l < n)
+        {
+            continue;
+        }
+        let (view_w, view_h) = (view.width / z.scale, view.height / z.scale);
         let (dzx, dzy) = (view_w * DEAD_ZONE, view_h * DEAD_ZONE);
 
         // Focus point per step. In follow mode the target only moves when the
@@ -113,8 +196,8 @@ pub fn camera_path(
             smooth_zero_phase(&mut py, FOLLOW_TAU_MS);
             for (j, i) in (i0..=i1).enumerate() {
                 let (mx, my) = (view_w * KEEP_IN_VIEW, view_h * KEEP_IN_VIEW);
-                px[j] = px[j].clamp(cursor.x[i] - mx, cursor.x[i] + mx);
-                py[j] = py[j].clamp(cursor.y[i] - my, cursor.y[i] + my);
+                px[j] = px[j].clamp(kx[i] - mx, kx[i] + mx);
+                py[j] = py[j].clamp(ky[i] - my, ky[i] + my);
             }
         }
 
@@ -126,14 +209,12 @@ pub fn camera_path(
             if s <= scale[i] {
                 continue; // an overlapping segment already zooms further here
             }
-            // Blend from the crop centre to the focus so that the motion looks
-            // like zooming *towards* the focus and ends centred on it.
+            // Blend from the resting centre to the focus so that the motion
+            // looks like zooming *towards* the focus and ends centred on it.
             let w = (1.0 - 1.0 / s) / (1.0 - 1.0 / z.scale);
-            let (mut x, mut y) = (ccx + (pos.0 - ccx) * w, ccy + (pos.1 - ccy) * w);
+            let (rx, ry) = view.rest(i);
             // Never show anything outside the recording.
-            let (hw, hh) = (crop.width / s / 2.0, crop.height / s / 2.0);
-            x = x.clamp(crop.x + hw, crop.x + crop.width - hw);
-            y = y.clamp(crop.y + hh, crop.y + crop.height - hh);
+            let (x, y) = view.clamp(rx + (pos.0 - rx) * w, ry + (pos.1 - ry) * w, s);
             cx[i] = x;
             cy[i] = y;
             scale[i] = s;
@@ -170,6 +251,10 @@ mod tests {
             manual: false,
         }
     }
+    fn camera(zooms: &[Zoom], cur: &CursorPath, view: &View, dur: f64) -> CameraPath {
+        camera_path(zooms, &Follow::cursor(cur), view, dur)
+    }
+
     fn still_cursor(x: f64, y: f64, dur: f64) -> CursorPath {
         let log = EventLog {
             header: Header::new(1920, 1080, "exact", "metadata"),
@@ -198,10 +283,10 @@ mod tests {
     #[test]
     fn rests_at_full_view_outside_segments() {
         let cur = still_cursor(600.0, 400.0, 10_000.0);
-        let cam = camera_path(
+        let cam = camera(
             &[zoom(2000.0, 6000.0, 600.0, 400.0, ZoomMode::Fixed)],
             &cur,
-            CROP,
+            &View::whole(CROP),
             10_000.0,
         );
         assert_eq!(cam.sample(1000.0), (960.0, 540.0, 1.0));
@@ -222,10 +307,10 @@ mod tests {
             width: 800.0,
             height: 600.0,
         };
-        let cam = camera_path(
+        let cam = camera(
             &[zoom(500.0, 9000.0, 5.0, 1075.0, ZoomMode::Follow)],
             &cur,
-            crop,
+            &View::whole(crop),
             10_000.0,
         );
         for i in 0..cam.cx.len() {
@@ -263,10 +348,10 @@ mod tests {
                 ],
             };
             let cur = cursor_path(&log, 10_000.0, 0.5, 0.0);
-            camera_path(
+            camera(
                 &[zoom(1000.0, 9000.0, 700.0, 540.0, ZoomMode::Follow)],
                 &cur,
-                CROP,
+                &View::whole(CROP),
                 10_000.0,
             )
         };
@@ -280,10 +365,10 @@ mod tests {
     #[test]
     fn camera_motion_is_continuous() {
         let cur = still_cursor(300.0, 300.0, 6000.0);
-        let cam = camera_path(
+        let cam = camera(
             &[zoom(500.0, 1200.0, 300.0, 300.0, ZoomMode::Follow)],
             &cur,
-            CROP,
+            &View::whole(CROP),
             6000.0,
         );
         for w in cam.scale.windows(2) {

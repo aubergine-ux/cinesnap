@@ -5,6 +5,10 @@
 //! a constant frame rate into an ffmpeg encoder. When the compositor supports
 //! cursor mode "metadata", the cursor is not in the frames; its position rides
 //! along on each buffer and feeds the event log instead.
+//!
+//! The stream stays open for the whole session; each segment of a recording
+//! (pausing ends one) gets its own writer and file, so resuming does not
+//! bring the picker back.
 
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
@@ -40,18 +44,28 @@ struct Latest {
 struct Shared {
     latest: Mutex<Latest>,
     arrived: Condvar,
-    t0: OnceLock<Instant>,
     cursor: Arc<Mutex<(f64, f64)>>,
+    /// Where cursor moves go; `None` between segments.
+    sink: Mutex<Option<Sink>>,
     error: Mutex<Option<String>>,
+}
+
+/// The encoder of the current segment.
+struct Writer {
+    stop: Arc<AtomicBool>,
+    thread: JoinHandle<Result<()>>,
 }
 
 pub struct PortalCapture {
     shared: Arc<Shared>,
-    stop: Arc<AtomicBool>,
+    ffmpeg: PathBuf,
+    encoder: Encoder,
+    fps: u32,
+    vfr: bool,
     quit: pw::channel::Sender<()>,
     close_session: mpsc::Sender<()>,
-    pw_thread: Option<JoinHandle<()>>,
-    writer: Option<JoinHandle<Result<()>>>,
+    pw_thread: Mutex<Option<JoinHandle<()>>>,
+    writer: Mutex<Option<Writer>>,
     /// Whether the cursor position is delivered as metadata (and the cursor
     /// is therefore absent from the video).
     pub cursor_metadata: bool,
@@ -223,7 +237,6 @@ fn cursor_meta_param() -> Vec<u8> {
 struct StreamState {
     format: spa::param::video::VideoInfoRaw,
     shared: Arc<Shared>,
-    sink: Sink,
     last_cursor: (i32, i32),
 }
 
@@ -253,7 +266,9 @@ unsafe fn handle_buffer(pwb: *mut pw::sys::pw_buffer, st: &mut StreamState) {
                     st.last_cursor = pos;
                     let (x, y) = (pos.0 as f64, pos.1 as f64);
                     *st.shared.cursor.lock().unwrap() = (x, y);
-                    st.sink.push(EventKind::Move { x, y });
+                    if let Some(sink) = st.shared.sink.lock().unwrap().as_ref() {
+                        sink.push(EventKind::Move { x, y });
+                    }
                 }
             }
         }
@@ -317,7 +332,6 @@ fn run_pipewire(
     fd: OwnedFd,
     want_cursor: bool,
     shared: Arc<Shared>,
-    sink: Sink,
     quit: pw::channel::Receiver<()>,
 ) -> Result<()> {
     pw::init();
@@ -341,7 +355,6 @@ fn run_pipewire(
     let state = StreamState {
         format: Default::default(),
         shared,
-        sink,
         last_cursor: (i32::MIN, i32::MIN),
     };
     let _listener = stream
@@ -388,14 +401,18 @@ fn run_pipewire(
     Ok(())
 }
 
-/// Resample incoming frames to a constant frame rate and feed the encoder.
+/// Resample incoming frames to a constant frame rate and feed the encoder,
+/// which drops the repeats again for a variable frame rate.
+#[allow(clippy::too_many_arguments)]
 fn run_writer(
     ffmpeg: PathBuf,
     encoder: Encoder,
     fps: u32,
+    vfr: bool,
     out: PathBuf,
     shared: Arc<Shared>,
     stop: Arc<AtomicBool>,
+    started: Arc<OnceLock<Instant>>,
 ) -> Result<()> {
     // Wait for the first frame to learn the size and pixel format.
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -423,6 +440,9 @@ fn run_writer(
     };
 
     let mut filters = vec!["crop=trunc(iw/2)*2:trunc(ih/2)*2".to_string()];
+    if vfr {
+        filters.extend(encoder.decimate(fps));
+    }
     filters.extend(encoder.filter().map(String::from));
     let mut writer = FrameWriter::spawn_fmt(
         &ffmpeg,
@@ -434,12 +454,12 @@ fn run_writer(
         |c| {
             c.args(["-vf", &filters.join(",")]);
             c.args(encoder.codec_args(Quality::Master, true));
-            c.args(["-g", &fps.to_string()]).arg(&out);
+            c.args(super::grab::timing(fps, vfr)).arg(&out);
         },
     )?;
 
     let t0 = Instant::now();
-    let _ = shared.t0.set(t0);
+    let _ = started.set(t0);
     let mut written = 0u64;
     while !stop.load(Ordering::Relaxed) {
         {
@@ -466,26 +486,18 @@ fn run_writer(
 }
 
 impl PortalCapture {
-    /// Opens the system picker (blocking until the user answers) and starts
-    /// capturing to `out`.
-    pub fn start(
-        ffmpeg: &Path,
-        encoder: Encoder,
-        fps: u32,
-        out: &Path,
-        sink: Sink,
-    ) -> Result<Self> {
+    /// Open the system picker (blocking until the user answers) and start
+    /// receiving frames. Nothing is written until `begin`.
+    pub fn open(ffmpeg: &Path, encoder: Encoder, fps: u32, vfr: bool) -> Result<Self> {
         let portal = open_portal()?;
         let shared = Arc::new(Shared {
             latest: Mutex::default(),
             arrived: Condvar::new(),
-            t0: OnceLock::new(),
             cursor: Arc::new(Mutex::new((0.0, 0.0))),
+            sink: Mutex::new(None),
             error: Mutex::new(None),
         });
-        let stop = Arc::new(AtomicBool::new(false));
         let (quit, quit_rx) = pw::channel::channel();
-
         let pw_thread = {
             let (shared, want_cursor) = (shared.clone(), portal.cursor_metadata);
             std::thread::spawn(move || {
@@ -494,50 +506,77 @@ impl PortalCapture {
                     portal.fd,
                     want_cursor,
                     shared.clone(),
-                    sink,
                     quit_rx,
                 ) {
                     *shared.error.lock().unwrap() = Some(format!("PipeWire: {e}"));
                 }
             })
         };
-        let writer = {
-            let (ffmpeg, out, shared, stop) = (
-                ffmpeg.to_owned(),
-                out.to_owned(),
-                shared.clone(),
-                stop.clone(),
-            );
-            std::thread::spawn(move || run_writer(ffmpeg, encoder, fps, out, shared, stop))
-        };
         Ok(Self {
             shared,
-            stop,
+            ffmpeg: ffmpeg.to_owned(),
+            encoder,
+            fps,
+            vfr,
             quit,
             close_session: portal.close,
-            pw_thread: Some(pw_thread),
-            writer: Some(writer),
+            pw_thread: Mutex::new(Some(pw_thread)),
+            writer: Mutex::new(None),
             cursor_metadata: portal.cursor_metadata,
         })
     }
 
-    /// Block until the first frame has been written; returns its instant.
-    pub fn wait_first_frame(&mut self, timeout: Duration) -> Result<Instant> {
+    /// Start writing frames to `out`, cursor moves to `sink`. Blocks until
+    /// the first frame has been written and returns its instant.
+    pub fn begin(&self, out: &Path, sink: Sink, timeout: Duration) -> Result<Instant> {
+        self.end()?;
+        *self.shared.sink.lock().unwrap() = Some(sink);
+        let stop = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(OnceLock::new());
+        let thread = {
+            let (ffmpeg, out, shared, stop, started) = (
+                self.ffmpeg.clone(),
+                out.to_owned(),
+                self.shared.clone(),
+                stop.clone(),
+                started.clone(),
+            );
+            let (encoder, fps, vfr) = (self.encoder, self.fps, self.vfr);
+            std::thread::spawn(move || {
+                run_writer(ffmpeg, encoder, fps, vfr, out, shared, stop, started)
+            })
+        };
         let deadline = Instant::now() + timeout;
         loop {
-            if let Some(t) = self.shared.t0.get() {
+            if let Some(t) = started.get() {
+                *self.writer.lock().unwrap() = Some(Writer { stop, thread });
                 return Ok(*t);
             }
-            if self.writer.as_ref().is_some_and(|w| w.is_finished()) {
-                return match self.writer.take().unwrap().join() {
+            if thread.is_finished() {
+                *self.shared.sink.lock().unwrap() = None;
+                return match thread.join() {
                     Ok(Err(e)) => Err(e),
                     _ => Err(anyhow!("capture stopped unexpectedly")),
                 };
             }
             if Instant::now() > deadline {
+                stop.store(true, Ordering::Relaxed);
                 bail!("capture did not start in time");
             }
             std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Finish the current file. The stream stays open for the next one.
+    pub fn end(&self) -> Result<()> {
+        *self.shared.sink.lock().unwrap() = None;
+        let Some(w) = self.writer.lock().unwrap().take() else {
+            return Ok(());
+        };
+        w.stop.store(true, Ordering::Relaxed);
+        match w.thread.join() {
+            Ok(r) => r,
+            Err(_) => Err(anyhow!("the encoder thread crashed")),
         }
     }
 
@@ -546,23 +585,14 @@ impl PortalCapture {
         self.shared.cursor.clone()
     }
 
-    fn shutdown(&mut self) -> Result<()> {
-        self.stop.store(true, Ordering::Relaxed);
-        let result = match self.writer.take().map(|w| w.join()) {
-            Some(Ok(r)) => r,
-            Some(Err(_)) => Err(anyhow!("the encoder thread crashed")),
-            None => Ok(()),
-        };
+    fn shutdown(&self) -> Result<()> {
+        let result = self.end();
         let _ = self.quit.send(());
-        if let Some(t) = self.pw_thread.take() {
+        if let Some(t) = self.pw_thread.lock().unwrap().take() {
             let _ = t.join();
         }
         let _ = self.close_session.send(());
         result
-    }
-
-    pub fn stop(mut self) -> Result<()> {
-        self.shutdown()
     }
 }
 

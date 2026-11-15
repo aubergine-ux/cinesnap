@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cinesnap_core::events::{Button, EventKind};
+use cinesnap_core::events::{key_name, shortcut, Button, EventKind, KeyName, Modifiers};
 use evdev::{Device, EventSummary, KeyCode, RelativeAxisCode};
 
 use super::input::{Sink, Tracker};
@@ -36,12 +36,16 @@ pub fn available() -> bool {
     })
 }
 
-pub fn track(tracker: &mut Tracker, sink: Sink, cursor: Arc<Mutex<(f64, f64)>>) {
+pub fn track(tracker: &mut Tracker, sink: Sink, cursor: Arc<Mutex<(f64, f64)>>, shortcuts: bool) {
+    // Modifier state is shared: the modifier and the key may be on
+    // different devices (a keyboard and a macro pad, say).
+    let held = Arc::new(Mutex::new(Modifiers::default()));
     for mut dev in devices() {
         if dev.set_nonblocking(true).is_err() {
             continue;
         }
         let (stop, sink, cursor) = (tracker.stop_flag(), sink.clone(), cursor.clone());
+        let held = held.clone();
         tracker.add(std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 let events: Vec<_> = match dev.fetch_events() {
@@ -72,7 +76,22 @@ pub fn track(tracker: &mut Tracker, sink: Sink, cursor: Arc<Mutex<(f64, f64)>>) 
                                 (Some(b), 0) => sink.push(EventKind::Up { b, x, y }),
                                 // Keyboard keys only; other BTN_* codes
                                 // (touch, tool, gamepad) are not typing.
-                                (None, 1) if code.code() < 0x100 => sink.push(EventKind::Key),
+                                (None, value) if code.code() < 0x100 => {
+                                    let name = key_name(&format!("{code:?}"));
+                                    let mut mods = held.lock().unwrap();
+                                    let down = value != 0;
+                                    match name {
+                                        KeyName::Ctrl => mods.ctrl = down,
+                                        KeyName::Alt => mods.alt = down,
+                                        KeyName::Shift => mods.shift = down,
+                                        KeyName::Meta => mods.meta = down,
+                                        // 1 is a press; 2 is auto-repeat.
+                                        _ if value == 1 => sink.push(EventKind::Key {
+                                            combo: shortcut(*mods, &name).filter(|_| shortcuts),
+                                        }),
+                                        _ => {}
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -96,5 +115,20 @@ pub fn track(tracker: &mut Tracker, sink: Sink, cursor: Arc<Mutex<(f64, f64)>>) 
                 }
             }
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kernel_key_names_are_understood() {
+        let name = |code: KeyCode| key_name(&format!("{code:?}"));
+        assert_eq!(name(KeyCode::KEY_LEFTCTRL), KeyName::Ctrl);
+        assert_eq!(name(KeyCode::KEY_RIGHTMETA), KeyName::Meta);
+        assert_eq!(name(KeyCode::KEY_K), KeyName::Printing("K".into()));
+        assert_eq!(name(KeyCode::KEY_ENTER), KeyName::Action("Enter".into()));
+        assert_eq!(name(KeyCode::KEY_F5), KeyName::Action("F5".into()));
     }
 }

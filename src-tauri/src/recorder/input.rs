@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use cinesnap_core::events::{Button, EventKind};
+use cinesnap_core::events::{key_name, shortcut, Button, EventKind, KeyName, Modifiers};
 
 #[derive(Clone, Default)]
 pub struct Sink(Arc<Mutex<Vec<(Instant, EventKind)>>>);
@@ -65,8 +65,10 @@ impl Mapping {
 /// Poll the global pointer, buttons and keyboard. Used on Windows, macOS and
 /// X11, where the OS lets any process ask for this state.
 ///
-/// Only the fact that a key went down is recorded, never which key.
-pub fn poll(tracker: &mut Tracker, sink: Sink, map: Mapping) {
+/// Typed characters are never recorded, only that a key went down. With
+/// `shortcuts` on, shortcuts and action keys are labelled for the keystroke
+/// overlay (see `cinesnap_core::events::shortcut`).
+pub fn poll(tracker: &mut Tracker, sink: Sink, map: Mapping, shortcuts: bool) {
     use device_query::{DeviceQuery, DeviceState};
     let stop = tracker.stop_flag();
     tracker.add(std::thread::spawn(move || {
@@ -77,7 +79,7 @@ pub fn poll(tracker: &mut Tracker, sink: Sink, map: Mapping) {
             [(1, Button::Left), (2, Button::Right), (3, Button::Middle)];
         let mut last_pos = (i32::MIN, i32::MIN);
         let mut down = [false; 3];
-        let mut keys = 0usize;
+        let mut keys: Vec<String> = Vec::new();
         let mut tick = 0u32;
         while !stop.load(Ordering::Relaxed) {
             let mouse = device.get_mouse();
@@ -106,11 +108,26 @@ pub fn poll(tracker: &mut Tracker, sink: Sink, map: Mapping) {
             // plenty to notice typing.
             tick = tick.wrapping_add(1);
             if tick.is_multiple_of(4) {
-                let n = device.get_keys().len();
-                if n > keys {
-                    sink.push(EventKind::Key);
+                let now: Vec<String> = device.get_keys().iter().map(|k| format!("{k:?}")).collect();
+                let names: Vec<KeyName> = now.iter().map(|k| key_name(k)).collect();
+                let mods = Modifiers {
+                    ctrl: names.contains(&KeyName::Ctrl),
+                    alt: names.contains(&KeyName::Alt),
+                    shift: names.contains(&KeyName::Shift),
+                    meta: names.contains(&KeyName::Meta),
+                };
+                for (raw, name) in now.iter().zip(&names) {
+                    let modifier = matches!(
+                        name,
+                        KeyName::Ctrl | KeyName::Alt | KeyName::Shift | KeyName::Meta
+                    );
+                    if !modifier && !keys.contains(raw) {
+                        sink.push(EventKind::Key {
+                            combo: shortcut(mods, name).filter(|_| shortcuts),
+                        });
+                    }
                 }
-                keys = n;
+                keys = now;
             }
             std::thread::sleep(Duration::from_micros(4167));
         }

@@ -10,9 +10,14 @@ repository.workspace = true
 name = "cinesnap-cli"
 path = "src/bin/cinesnap.rs"
 
+[features]
+default = ["whisper"]
+# Speech-to-text with whisper.cpp, compiled in. Needs cmake and a C++ compiler.
+whisper = ["dep:whisper-rs"]
+
 [dependencies]
 anyhow = "1.0.104"
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -20,3 +25,6 @@ serde_json = "1.0.154"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 tiny-skia = "0.12.0"
+fontdue = "0.9.5"
+ureq = "3.5.2"
+whisper-rs = { version = "0.16.0", optional = true }

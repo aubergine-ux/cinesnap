@@ -1,0 +1,16 @@
+{
+  "name": "cinesnap-share",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted share server for Cinesnap recordings",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "license": "MIT"
+}

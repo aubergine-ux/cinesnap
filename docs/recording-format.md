@@ -6,20 +6,35 @@ A recording is a directory with the extension `.cinesnap`:
 my-demo.cinesnap/
 ├── project.json     manifest + edit state (the only file the editor rewrites)
 ├── events.jsonl     input event log (append-only while recording)
-├── video.mp4        screen, cursor hidden, constant frame rate
+├── video.mp4        screen, cursor hidden
 ├── mic.wav          optional microphone track
+├── system.wav       optional system (or single-app) sound
 ├── webcam.mp4       optional webcam track
-└── cursors/         optional cursor bitmaps captured during recording
-    └── 3.png
+├── cursors/         optional cursor bitmaps captured during recording
+│   └── 3.png
+├── clips/           more recordings on the timeline, one folder each:
+│   ├── part2/       the part after a pause or a screen switch
+│   └── clip1/       a recording added in the editor
+│                    (same files as above: video.mp4, events.jsonl, …)
+├── project.json.bak the manifest as it was before the last save
+└── cache/           derived files: cleaned-up voice, music, preview mix,
+                     where things change on screen (activity-*.json)
 ```
 
 Everything except `project.json` is immutable after recording stops, so edits
-are cheap, undoable, and never degrade the source.
+are cheap, undoable, and never degrade the source. `cache/` can be deleted at
+any time; it is rebuilt when needed.
+
+Saving is crash-safe: the manifest is written to a temporary file, flushed to
+disk and renamed over the old one, and the old one is kept as
+`project.json.bak`. If `project.json` cannot be parsed, the backup is used.
 
 ## Time base
 
-All times are **milliseconds from the first video frame**, as floating point
-numbers. Each track stores its own `offsetMs` in the manifest (when its first
+Inside a recording, all times are **milliseconds from the first video
+frame**, as floating point numbers. In the manifest, edit state uses
+**timeline time**: the clips laid end to end, before cuts (see
+[Clips](#clips)). For a project with a single recording the two are the same. Each track stores its own `offsetMs` in the manifest (when its first
 sample occurred on that clock), so tracks started by different processes stay
 in sync. Events that happen before the first frame have negative times and are
 kept; consumers ignore them.
@@ -44,6 +59,7 @@ event. Keys are short because move events dominate the file.
 {"t":341.9,"k":"down","b":"left","x":903.0,"y":455.0}
 {"t":422.3,"k":"up","b":"left","x":903.0,"y":455.0}
 {"t":1310.0,"k":"key"}
+{"t":1820.4,"k":"key","combo":"Ctrl+K"}
 {"t":1402.2,"k":"scroll","dx":0,"dy":-3,"x":903.0,"y":455.0}
 {"t":2051.6,"k":"cursor","id":3,"hx":4,"hy":2,"w":32,"h":32}
 {"t":5000.1,"k":"visible","v":false}
@@ -64,7 +80,7 @@ event. Keys are short because move events dominate the file.
 | --- | --- | --- |
 | `move` | `x`, `y` | Deduplicated; at most one per poll or frame. |
 | `down` / `up` | `b`: `left` \| `right` \| `middle`, `x`, `y`, optional `inferred: true` | Inferred clicks have a `down` only. |
-| `key` | — | A key went down. The key itself is **never** recorded. |
+| `key` | optional `combo` | A key went down. Typed characters are **never** recorded. `combo` is present only for shortcuts (a key pressed with Ctrl, Alt or the OS key) and action keys (Enter, Esc, Tab, arrows, function keys…), as a display string such as `Ctrl+Shift+P`. It feeds the keystroke overlay and can be switched off when recording. |
 | `scroll` | `dx`, `dy`, `x`, `y` | Wheel steps. |
 | `cursor` | `id`, `hx`, `hy`, `w`, `h` | Cursor shape changed to `cursors/<id>.png` with the given hotspot. Only when the platform provides bitmaps. |
 | `visible` | `v` | Cursor left or re-entered the captured area. |
@@ -77,18 +93,21 @@ non-decreasing `t`. A truncated last line (crash during recording) is skipped.
 ```jsonc
 {
   "format": "cinesnap-project",
-  "version": 1,
+  "version": 3,
   "createdAt": "2026-11-12T03:55:00Z",
-  "app": "0.1.0",
+  "app": "0.2.0",
 
   // What was recorded. Never changes after recording.
   "source": {
-    "video":  { "file": "video.mp4", "width": 2560, "height": 1440, "fps": 60, "durationMs": 48211.0 },
+    "video":  { "file": "video.mp4", "width": 2560, "height": 1440, "fps": 60, "durationMs": 48211.0,
+                "vfr": true,                                   // optional: unchanged frames dropped
+                "hdr": "tonemapped" },                         // optional: HDR screen converted to SDR
     "mic":    { "file": "mic.wav", "offsetMs": -35.0 },        // optional
+    "system": { "file": "system.wav", "offsetMs": 12.0, "app": "Firefox" },  // optional; app only when limited to one
     "webcam": { "file": "webcam.mp4", "offsetMs": 120.0, "width": 1280, "height": 720 }, // optional
     "events": { "file": "events.jsonl" },
     "platform": "linux-wayland",
-    "target": "screen"                                         // screen | window | region
+    "target": "screen"                                         // screen | window | region | screens
   },
 
   // Everything below is edit state.
@@ -114,23 +133,137 @@ non-decreasing `t`. A truncated last line (crash during recording) is skipped.
   "cursor": {
     "show": true, "size": 1.6, "smoothing": 0.6,   // 0 = raw, 1 = very smooth
     "ripples": true, "rippleColor": "#ffffff",
-    "hideWhenIdleMs": 0, "style": "arrow"
+    "hideWhenIdleMs": 0,
+    "style": "arrow",                       // arrow | light | dot | image
+    "image": "cursors/mine.png",            // with style "image"; relative to the bundle or absolute
+    "hotspotX": 0.0, "hotspotY": 0.0,       // the image's tip, as fractions of its size
+    "highlight": "none",                    // none | ring | spotlight
+    "highlightColor": "#ffd84a", "highlightSize": 34   // px at 1080p
   },
 
   "frame": {
     "aspect": "16:9",                       // 16:9 | 9:16 | 1:1 | 4:3 | source
     "padding": 0.06,                        // fraction of the shorter output side
     "radius": 14, "shadow": 0.55,           // px at 1080p / 0..1
-    "background": { "type": "gradient", "from": "#6d5dfc", "to": "#e44d8a", "angle": 135 }
+    "background": { "type": "gradient", "from": "#6d5dfc", "to": "#e44d8a", "angle": 135 },
     // or {"type":"solid","color":"#111"} | {"type":"image","path":"…"} | {"type":"wallpaper","path":"…","blur":40}
+    "device": { "kind": "browser", "title": "example.com", "dark": true }
+    // kind: none | browser | macos | windows | laptop | phone; title shows in window title bars
   },
 
-  "webcam": { "show": true, "corner": "bottom-right", "size": 0.18, "shape": "circle" },
+  // Fill an output of another shape with a window that follows the cursor and
+  // what changes on screen. Segments place it by hand (centre in source pixels).
+  "reframe": { "enabled": true, "segments": [ { "id": "r1", "startMs": 5000, "endMs": 8000, "x": 640, "y": 360 } ] },
 
-  "export": { "format": "mp4", "preset": "1080p", "fps": 60, "quality": "high" }
+  // Shutter as a fraction of the frame interval (0.5 = 180°). Missing means off.
+  "motionBlur": { "enabled": true, "strength": 0.5 },
+
+  // corner is used until the bubble is placed freely (x, y: centre as fractions of the output)
+  "webcam": { "show": true, "corner": "bottom-right", "x": 0.9, "y": 0.84, "size": 0.18, "shape": "circle" },  // circle | rounded | square
+  "webcamKeys": [                                              // from atMs on, the bubble moves to this state
+    { "id": "w1", "atMs": 6000, "x": 0.12, "y": 0.2, "size": 0.25, "show": true },
+    { "id": "w2", "atMs": 15000, "x": 0.12, "y": 0.2, "size": 0.25, "show": false }
+  ],
+
+  "export": { "format": "mp4", "preset": "1080p", "fps": 60, "quality": "high" },
+
+  // Everything on the timeline, in order. See "Clips" below.
+  "clips": [
+    { "id": "title", "kind": "card", "transition": { "type": "cut", "durationMs": 500 },
+      "durationMs": 3000, "title": "Cinesnap", "subtitle": "…", "titleColor": "#ffffff",
+      "subtitleColor": "#ffffffb3", "titleSize": 96, "align": "center" },   // optional: font, background
+    { "id": "main", "kind": "recording", "transition": { "type": "crossfade", "durationMs": 500 },
+      "dir": "", "source": { /* as above */ }, "crop": { "x": 0, "y": 0, "width": 2560, "height": 1440 } },
+    { "id": "clip1", "kind": "recording", "transition": { "type": "zoom", "durationMs": 600 },
+      "dir": "clips/clip1", "source": { /* that recording's tracks */ }, "crop": { /* … */ } }
+  ],
+
+  // Drawn over the recording between two timeline times. Positions are source
+  // pixels of the clip on screen, so annotations follow the camera.
+  "annotations": [
+    { "id": "a1", "startMs": 2000, "endMs": 5000, "type": "text", "x": 700, "y": 450, "text": "Look here",
+      "size": 44, "color": "#ffffff", "background": "#14151af0", "bold": true },        // optional: font
+    { "id": "a2", "startMs": 2000, "endMs": 5000, "type": "arrow", "x1": 600, "y1": 640, "x2": 900, "y2": 480, "color": "#6d5dfc", "width": 8 },
+    { "id": "a3", "startMs": 2000, "endMs": 5000, "type": "box", "x": 0, "y": 0, "width": 400, "height": 200, "color": "#6d5dfc", "stroke": 6, "radius": 8 },
+    { "id": "a4", "startMs": 2000, "endMs": 5000, "type": "highlight", "x": 0, "y": 0, "width": 400, "height": 80, "color": "#ffe14a", "opacity": 0.7 },
+    { "id": "a5", "startMs": 2000, "endMs": 5000, "type": "spotlight", "x": 0, "y": 0, "width": 400, "height": 200, "dim": 0.65, "ellipse": false },
+    { "id": "a6", "startMs": 2000, "endMs": 5000, "type": "blur", "x": 0, "y": 0, "width": 400, "height": 200, "strength": 14 }
+  ],
+
+  // Fonts and colours shared by cards, callouts, captions and the keystroke overlay.
+  "theme": { "font": "Inter", "accent": "#6d5dfc", "text": "#ffffff", "surface": "#14151af0" },
+  "keystrokes": { "show": true, "position": "bottom", "size": 1.0, "holdMs": 1500 },
+
+  "captions": { "show": true, "style": "karaoke", "y": 0.82, "size": 1.0, "color": "#ffffff",
+                "highlight": "#ffd84a", "background": "#000000a6", "maxChars": 36, "uppercase": false },
+  "transcript": { "language": "en", "words": [ { "t0": 560, "t1": 820, "text": "And" } ] },
+
+  // Flagged moments: the marker hotkey while recording, or M in the editor.
+  "markers": [ { "id": "m1", "atMs": 4200, "label": "Install" } ],
+
+  "audio": {
+    "micVolume": 1.0, "micMute": false, "systemVolume": 0.8, "systemMute": false,
+    "denoise": 0.5, "normalize": true,
+    "eq": { "enabled": true, "lowCutHz": 80, "bassDb": 0, "presenceDb": 3, "airDb": 1.5 },
+    "music": { "source": "builtin:open-sky", "volume": 0.35, "duck": true, "duckDb": -14, "fadeInMs": 800, "fadeOutMs": 2500 }
+  }
 }
 ```
 
-Times in `cuts` and `zooms` are **source time**; the mapping to output time
-(after cuts) is derived, so cutting a section never invalidates zoom segments.
+## Video timing
+
+`video.mp4` is H.264 with a keyframe every second. With `vfr`, frames that
+are identical to the one before were left out while recording (at least
+four a second are kept), so an idle screen costs almost nothing; `fps` is
+then the highest rate. Readers that need a constant rate resample (the
+exporter decodes through ffmpeg's `fps` filter).
+
+## Clips
+
+`clips` is the timeline: recordings and cards, in order. A version 1 manifest
+has no `clips`; readers treat it as a single recording clip made from the
+top-level `source` and `crop` (which later versions keep for older builds).
+
+A recording that was paused, or switched to another screen, is several
+clips joined with `cut` transitions: `main`, then `part2`, `part3`… in
+`clips/partN/`. Nothing is captured while paused. On a screen switch the
+next part starts before the previous one stops, and the overlap is an
+ordinary cut, as are the countdown and the reach for the stop button.
+
+**Timeline time** is the position in the clips laid end to end, each at its
+full length. `cuts`, `zooms`, `annotations`, `webcamKeys` and the transcript
+all use it. A zoom or annotation belongs to the clip it starts in; its
+positions are in that recording's source pixels. Inserting, removing or
+reordering clips shifts the times of everything attached to them.
+
+A clip's `transition` describes how it comes in from the clip before it:
+`cut`, `crossfade` or `zoom` (zoom-through). The blend is centred on the
+join and neither clip is shortened: the clip that is not playing is shown on
+its first (incoming) or last (outgoing) frame.
+
+`export.preset` is one of `1080p`, `720p`, `1440p`, `4k` (MP4), `readme`,
+`small` (GIF), or a destination preset: `readme-mp4`, `x`, `youtube`,
+`shorts`. Destination presets may set their own frame rate and aspect ratio
+and a file-size limit.
+
+The mapping from timeline time to output time (after cuts) is derived, so
+cutting a section never invalidates zoom segments, annotations or captions.
 Unknown fields are preserved on save so newer projects survive older builds.
+
+## Versions and migrations
+
+`version` is bumped whenever the meaning of the file changes. A reader
+upgrades older manifests step by step before using them
+(`crates/cinesnap-core/src/migrate.rs`) and never writes an older version.
+Steps only add or rewrite what they are about, and never change a value in
+a way an older build would misread.
+
+| Version | Written by | Change |
+| --- | --- | --- |
+| 1 | 0.1 | First format: one recording, edit state at the top level. |
+| 2 | 0.2 | `clips` (recordings and cards), annotations, webcam keyframes, captions, transcript, audio. |
+| 3 | 0.3 | `markers`; `source.system`; `micMute`, `systemVolume`, `systemMute`; `video.vfr` and `video.hdr`; recordings split into parts at pauses; `frame.device`, `reframe`, `motionBlur`; cursor `style`, `image`, `hotspotX/Y`, `highlight*`. |
+
+Manifests written by each release are kept as test fixtures
+(`crates/cinesnap-core/tests/fixtures/v*-project.json`) and must keep
+loading.

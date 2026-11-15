@@ -124,17 +124,39 @@ impl Drop for Grab {
     }
 }
 
-/// A screen (or the part of the desktop) to capture, in desktop pixels.
-/// Which fields are used depends on the platform's grabber.
+/// A screen to capture, in video pixels. Which fields are used depends on
+/// the platform's grabber.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ScreenArea {
-    /// Position in the OS's screen list (Windows and macOS).
+    /// The grabber's number for the screen: the Desktop Duplication output
+    /// on Windows, the avfoundation screen on macOS.
     pub index: usize,
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    /// The screen is in HDR mode (Windows): captured in 10 bit, converted.
+    pub hdr: bool,
+    /// Where SDR content sits on it in HDR mode.
+    pub sdr_white_nits: f64,
+}
+
+/// The rectangle around all `areas`: `(x, y, width, height)`.
+pub fn bounds(areas: &[ScreenArea]) -> (i32, i32, u32, u32) {
+    let x0 = areas.iter().map(|a| a.x).min().unwrap_or(0);
+    let y0 = areas.iter().map(|a| a.y).min().unwrap_or(0);
+    let x1 = areas
+        .iter()
+        .map(|a| a.x + a.width as i32)
+        .max()
+        .unwrap_or(2);
+    let y1 = areas
+        .iter()
+        .map(|a| a.y + a.height as i32)
+        .max()
+        .unwrap_or(2);
+    (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
 }
 
 /// Which grabber to use on Windows; `Dda` is faster, `Gdi` works everywhere.
@@ -144,86 +166,233 @@ pub enum WinGrab {
     Gdi,
 }
 
-/// Add the platform's screen input to `cmd`; returns filters that must come
-/// first in the filter chain.
+/// One grabber: its ffmpeg input arguments, and the filters its frames go
+/// through before anything else. `at` is where it goes in the picture.
+#[allow(dead_code)]
+struct Input {
+    args: Vec<String>,
+    filters: Vec<String>,
+    at: (i32, i32),
+}
+
+/// Where the HDR conversion's lookup tables are kept. ffmpeg runs there so
+/// filter arguments can name them without escaping a Windows path.
+pub fn lut_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("cinesnap-luts")
+}
+
+fn owned(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
 #[allow(unused_variables)]
-fn screen_input(cmd: &mut Command, area: &ScreenArea, fps: u32, win: WinGrab) -> Vec<String> {
+fn inputs(areas: &[ScreenArea], fps: u32, win: WinGrab) -> Result<Vec<Input>> {
     let fps_s = fps.to_string();
+    let (bx, by, bw, bh) = bounds(areas);
     #[cfg(target_os = "linux")]
     {
+        // X11 is one big framebuffer: grab the rectangle around the screens.
         let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
-        cmd.args(["-f", "x11grab", "-draw_mouse", "0", "-framerate", &fps_s]);
-        cmd.args(["-video_size", &format!("{}x{}", area.width, area.height)]);
-        cmd.args(["-i", &format!("{display}+{},{}", area.x, area.y)]);
-        vec![]
+        Ok(vec![Input {
+            args: owned(&[
+                "-f",
+                "x11grab",
+                "-draw_mouse",
+                "0",
+                "-framerate",
+                &fps_s,
+                "-video_size",
+                &format!("{bw}x{bh}"),
+                "-i",
+                &format!("{display}+{bx},{by}"),
+            ]),
+            filters: vec![],
+            at: (0, 0),
+        }])
     }
     #[cfg(target_os = "windows")]
     {
-        if win == WinGrab::Dda {
-            let src = format!(
-                "ddagrab=output_idx={}:draw_mouse=0:framerate={fps}",
-                area.index
-            );
-            cmd.args(["-f", "lavfi", "-i", &src]);
-            vec!["hwdownload".into(), "format=bgra".into()]
-        } else {
-            cmd.args(["-f", "gdigrab", "-draw_mouse", "0", "-framerate", &fps_s]);
-            cmd.args([
-                "-offset_x",
-                &area.x.to_string(),
-                "-offset_y",
-                &area.y.to_string(),
-            ]);
-            cmd.args([
-                "-video_size",
-                &format!("{}x{}", area.width, area.height),
-                "-i",
-                "desktop",
-            ]);
-            vec![]
+        if win == WinGrab::Gdi {
+            return Ok(vec![Input {
+                args: owned(&[
+                    "-f",
+                    "gdigrab",
+                    "-draw_mouse",
+                    "0",
+                    "-framerate",
+                    &fps_s,
+                    "-offset_x",
+                    &bx.to_string(),
+                    "-offset_y",
+                    &by.to_string(),
+                    "-video_size",
+                    &format!("{bw}x{bh}"),
+                    "-i",
+                    "desktop",
+                ]),
+                filters: vec![],
+                at: (0, 0),
+            }]);
         }
+        areas
+            .iter()
+            .map(|a| -> Result<Input> {
+                let fmt = if a.hdr { ":output_fmt=x2bgr10" } else { "" };
+                let src = format!(
+                    "ddagrab=output_idx={}:draw_mouse=0:framerate={fps}{fmt}",
+                    a.index
+                );
+                let mut filters = owned(&["hwdownload"]);
+                if a.hdr {
+                    filters.push("format=x2bgr10le".into());
+                    filters.extend(cinesnap_core::tonemap::filters(
+                        &lut_dir(),
+                        a.sdr_white_nits,
+                    )?);
+                } else {
+                    filters.push("format=bgra".into());
+                }
+                Ok(Input {
+                    args: owned(&["-f", "lavfi", "-i", &src]),
+                    filters,
+                    at: (a.x - bx, a.y - by),
+                })
+            })
+            .collect()
     }
     #[cfg(target_os = "macos")]
     {
-        cmd.args([
-            "-f",
-            "avfoundation",
-            "-capture_cursor",
-            "0",
-            "-framerate",
-            &fps_s,
-        ]);
-        cmd.args(["-i", &format!("Capture screen {}:none", area.index)]);
-        vec![]
+        Ok(areas
+            .iter()
+            .map(|a| Input {
+                args: owned(&[
+                    "-f",
+                    "avfoundation",
+                    "-capture_cursor",
+                    "0",
+                    "-framerate",
+                    &fps_s,
+                    "-i",
+                    &format!("Capture screen {}:none", a.index),
+                ]),
+                filters: vec![],
+                at: (a.x - bx, a.y - by),
+            })
+            .collect())
     }
 }
 
-/// Record a screen to `out` as a constant-frame-rate H.264 intermediate.
+/// The filter graph for `inputs` (each a filter chain, possibly empty),
+/// laid out at `at` and followed by `post`. One input is a plain `-vf`
+/// chain; several are stacked with `xstack` into the output `[v]`.
+fn graph(inputs: &[(Vec<String>, (i32, i32))], post: &[String]) -> (bool, String) {
+    let chain = |f: &[String]| {
+        if f.is_empty() {
+            "null".to_owned()
+        } else {
+            f.join(",")
+        }
+    };
+    if let [(filters, _)] = inputs {
+        let all: Vec<String> = filters.iter().chain(post).cloned().collect();
+        return (false, chain(&all));
+    }
+    let mut g = String::new();
+    for (i, (filters, _)) in inputs.iter().enumerate() {
+        g += &format!("[{i}:v]{}[s{i}];", chain(filters));
+    }
+    for i in 0..inputs.len() {
+        g += &format!("[s{i}]");
+    }
+    let layout: Vec<String> = inputs
+        .iter()
+        .map(|(_, (x, y))| format!("{x}_{y}"))
+        .collect();
+    g += &format!(
+        "xstack=inputs={}:layout={}:fill=black",
+        inputs.len(),
+        layout.join("|")
+    );
+    if !post.is_empty() {
+        g += ",";
+        g += &post.join(",");
+    }
+    g += "[v]";
+    (true, g)
+}
+
+/// Record screens to `out` as an H.264 intermediate, at a constant frame
+/// rate or, with `vfr`, dropping frames where nothing changed.
 pub fn screen(
     ffmpeg: &Path,
     encoder: Encoder,
-    area: &ScreenArea,
+    areas: &[ScreenArea],
     fps: u32,
+    vfr: bool,
     out: &Path,
     win: WinGrab,
 ) -> Result<Grab> {
     let mut cmd = ffmpeg::command_interactive(ffmpeg);
     cmd.args(["-nostats", "-loglevel", "info", "-y"])
         .args(encoder.global_args());
-    let mut filters = screen_input(&mut cmd, area, fps, win);
-    filters.push("crop=trunc(iw/2)*2:trunc(ih/2)*2".into());
-    filters.push("showinfo=checksum=0".into());
-    filters.extend(encoder.filter().map(String::from));
-    cmd.args(["-vf", &filters.join(",")]);
+    let inputs = inputs(areas, fps, win)?;
+    if areas.iter().any(|a| a.hdr) {
+        cmd.current_dir(lut_dir());
+    }
+    for i in &inputs {
+        cmd.args(&i.args);
+    }
+    let mut post = vec![
+        "crop=trunc(iw/2)*2:trunc(ih/2)*2".to_string(),
+        "showinfo=checksum=0".into(),
+    ];
+    if vfr {
+        post.extend(encoder.decimate(fps));
+    }
+    post.extend(encoder.filter().map(String::from));
+    let chains: Vec<_> = inputs.into_iter().map(|i| (i.filters, i.at)).collect();
+    let (complex, filters) = graph(&chains, &post);
+    if complex {
+        cmd.args(["-filter_complex", &filters, "-map", "[v]"]);
+    } else {
+        cmd.args(["-vf", &filters]);
+    }
     cmd.args(encoder.codec_args(Quality::Master, true));
-    // One keyframe per second keeps scrubbing in the editor responsive.
+    cmd.args(timing(fps, vfr)).arg(out);
+    Grab::spawn(cmd)
+}
+
+/// Output frame timing. Keyframes once a second either way, so scrubbing
+/// in the editor stays responsive.
+pub fn timing(fps: u32, vfr: bool) -> Vec<String> {
+    let fps = fps.to_string();
+    if vfr {
+        owned(&[
+            "-fps_mode",
+            "vfr",
+            "-force_key_frames",
+            "expr:gte(t,n_forced)",
+        ])
+    } else {
+        owned(&["-fps_mode", "cfr", "-r", &fps, "-g", &fps])
+    }
+}
+
+/// What the computer plays, from a PulseAudio/PipeWire monitor source.
+#[cfg(target_os = "linux")]
+pub fn system_audio(ffmpeg: &Path, source: &str, out: &Path) -> Result<Grab> {
+    let mut cmd = ffmpeg::command_interactive(ffmpeg);
+    cmd.args(["-nostats", "-loglevel", "info", "-y"]);
+    cmd.args(["-f", "pulse", "-i", source]);
     cmd.args([
-        "-fps_mode",
-        "cfr",
-        "-r",
-        &fps.to_string(),
-        "-g",
-        &fps.to_string(),
+        "-af",
+        "ashowinfo",
+        "-c:a",
+        "pcm_s16le",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
     ])
     .arg(out);
     Grab::spawn(cmd)
@@ -272,4 +441,72 @@ pub fn webcam(ffmpeg: &Path, device: &str, out: &Path) -> Result<Grab> {
     ]);
     cmd.args(["-fps_mode", "cfr", "-r", "30"]).arg(out);
     Grab::spawn(cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(s: &[&str]) -> Vec<String> {
+        owned(s)
+    }
+
+    #[test]
+    fn one_screen_is_a_plain_chain() {
+        let (complex, g) = graph(&[(vec![], (0, 0))], &v(&["crop=2:2", "showinfo"]));
+        assert!(!complex);
+        assert_eq!(g, "crop=2:2,showinfo");
+        let (_, g) = graph(&[(vec![], (0, 0))], &[]);
+        assert_eq!(g, "null");
+    }
+
+    #[test]
+    fn several_screens_are_stacked_where_they_are() {
+        let inputs = [
+            (v(&["hwdownload", "format=bgra"]), (0, 120)),
+            (vec![], (2560, 0)),
+        ];
+        let (complex, g) = graph(&inputs, &v(&["showinfo"]));
+        assert!(complex);
+        assert_eq!(
+            g,
+            "[0:v]hwdownload,format=bgra[s0];[1:v]null[s1];[s0][s1]\
+             xstack=inputs=2:layout=0_120|2560_0:fill=black,showinfo[v]"
+        );
+    }
+
+    #[test]
+    fn bounds_cover_every_screen() {
+        let a = |x, y, width, height| ScreenArea {
+            index: 0,
+            x,
+            y,
+            width,
+            height,
+            hdr: false,
+            sdr_white_nits: 203.0,
+        };
+        assert_eq!(bounds(&[a(0, 0, 1920, 1080)]), (0, 0, 1920, 1080));
+        assert_eq!(
+            bounds(&[a(0, 200, 1920, 1080), a(-2560, 0, 2560, 1440)]),
+            (-2560, 0, 4480, 1440)
+        );
+    }
+
+    #[test]
+    fn vfr_timing_forces_a_keyframe_every_second() {
+        assert_eq!(
+            timing(60, false),
+            v(&["-fps_mode", "cfr", "-r", "60", "-g", "60"])
+        );
+        assert_eq!(
+            timing(60, true),
+            v(&[
+                "-fps_mode",
+                "vfr",
+                "-force_key_frames",
+                "expr:gte(t,n_forced)"
+            ])
+        );
+    }
 }

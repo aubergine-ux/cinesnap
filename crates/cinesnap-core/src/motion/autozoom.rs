@@ -1,5 +1,6 @@
 //! Turn the event log into zoom segments.
 
+use crate::activity::Activity;
 use crate::events::{EventKind, EventLog};
 use crate::motion::timeline::Kept;
 use crate::project::{default_ease_in, default_ease_out, Easing, Project, Zoom, ZoomMode};
@@ -15,6 +16,27 @@ const LEAD_IN: f64 = 0.75;
 /// Shortest hold after the last interest point when the next segment is
 /// close and the two are not merged.
 const MIN_HOLD_MS: f64 = 300.0;
+/// What typing does to the picture shows up within this long of a key.
+pub const ECHO_MS: f64 = 350.0;
+/// A change bigger than this share of the screen is not text being typed.
+pub const TYPED_SHARE: f64 = 0.02;
+
+/// Times of the keys of each typing burst.
+pub fn typing_bursts(log: &EventLog) -> Vec<Vec<f64>> {
+    let mut bursts: Vec<Vec<f64>> = Vec::new();
+    let mut cur: Vec<f64> = Vec::new();
+    for e in &log.events {
+        if let EventKind::Key { .. } = e.kind {
+            if cur.last().is_some_and(|&t| e.t - t > TYPING_GAP_MS) {
+                bursts.push(std::mem::take(&mut cur));
+            }
+            cur.push(e.t);
+        }
+    }
+    bursts.push(cur);
+    bursts.retain(|b| b.len() >= TYPING_MIN_KEYS);
+    bursts
+}
 
 #[derive(Clone, Copy, Debug)]
 struct Point {
@@ -26,7 +48,7 @@ struct Point {
     inferred: bool,
 }
 
-fn interest_points(project: &Project, log: &EventLog) -> Vec<Point> {
+fn interest_points(project: &Project, log: &EventLog, activity: Option<&Activity>) -> Vec<Point> {
     let kept = Kept::new(project.source.video.duration_ms, &project.cuts);
     let crop = project.crop;
     let mut points = Vec::new();
@@ -36,6 +58,11 @@ fn interest_points(project: &Project, log: &EventLog) -> Vec<Point> {
 
     let flush = |burst: &mut Vec<f64>, pos: (f64, f64), points: &mut Vec<Point>| {
         if burst.len() >= TYPING_MIN_KEYS {
+            // Where the text appears beats where the mouse was clicked.
+            let typed = activity.and_then(|a| {
+                a.local_change(burst[0], burst.last().unwrap() + ECHO_MS, TYPED_SHARE)
+            });
+            let pos = typed.unwrap_or(pos);
             points.push(Point {
                 t: burst[0],
                 end: *burst.last().unwrap(),
@@ -62,7 +89,7 @@ fn interest_points(project: &Project, log: &EventLog) -> Vec<Point> {
                     inferred,
                 });
             }
-            EventKind::Key if project.auto_zoom.on_typing => {
+            EventKind::Key { .. } if project.auto_zoom.on_typing => {
                 if burst.last().is_some_and(|&t| e.t - t > TYPING_GAP_MS) {
                     flush(&mut burst, burst_pos, &mut points);
                 }
@@ -83,7 +110,7 @@ fn interest_points(project: &Project, log: &EventLog) -> Vec<Point> {
 
 /// Regenerate automatic zoom segments. Manual segments are kept untouched and
 /// automatic ones never overlap them. Returns the full, sorted segment list.
-pub fn auto_zoom(project: &Project, log: &EventLog) -> Vec<Zoom> {
+pub fn auto_zoom(project: &Project, log: &EventLog, activity: Option<&Activity>) -> Vec<Zoom> {
     let mut result: Vec<Zoom> = project.zooms.iter().filter(|z| z.manual).cloned().collect();
     if !project.auto_zoom.enabled {
         return result;
@@ -95,7 +122,7 @@ pub fn auto_zoom(project: &Project, log: &EventLog) -> Vec<Zoom> {
     // Group points that are close in time.
     let last_end = |g: &[Point]| g.iter().map(|p| p.end).fold(f64::MIN, f64::max);
     let mut groups: Vec<Vec<Point>> = Vec::new();
-    for p in interest_points(project, log) {
+    for p in interest_points(project, log, activity) {
         match groups.last_mut() {
             Some(g) if p.t - last_end(g) < merge_gap => g.push(p),
             _ => groups.push(vec![p]),
@@ -175,7 +202,7 @@ mod tests {
     fn key(t: f64) -> Event {
         Event {
             t,
-            kind: EventKind::Key,
+            kind: EventKind::Key { combo: None },
         }
     }
     fn log(events: Vec<Event>) -> EventLog {
@@ -193,7 +220,7 @@ mod tests {
             click(3500.0, 300.0, 200.0),
             click(12_000.0, 900.0, 500.0),
         ]);
-        let z = auto_zoom(&p, &l);
+        let z = auto_zoom(&p, &l, None);
         assert_eq!(z.len(), 2);
         assert_eq!(z[0].start_ms, 2000.0 - 450.0);
         assert_eq!(z[0].end_ms, 3500.0 + 900.0 + 700.0);
@@ -207,20 +234,69 @@ mod tests {
         let p = project(1920, 1080, 30_000.0);
         let mut ev = vec![click(2000.0, 400.0, 400.0)];
         ev.extend((0..20).map(|i| key(2500.0 + i as f64 * 300.0)));
-        let z = auto_zoom(&p, &log(ev.clone()));
+        let z = auto_zoom(&p, &log(ev.clone()), None);
         assert_eq!(z.len(), 1);
         assert_eq!(z[0].end_ms, 2500.0 + 19.0 * 300.0 + 1600.0);
 
         let mut no_typing = p.clone();
         no_typing.auto_zoom.on_typing = false;
-        let z = auto_zoom(&no_typing, &log(ev));
+        let z = auto_zoom(&no_typing, &log(ev), None);
         assert_eq!(z[0].end_ms, 2000.0 + 1600.0);
+    }
+
+    #[test]
+    fn typing_zooms_to_where_the_text_appears() {
+        use crate::activity::analyze_frames;
+        let p = project(1920, 1080, 30_000.0);
+        // Clicked at the top left, then typed into a field lower right; the
+        // screen changes there one cell at a time (cells of 80 × 90 px).
+        let mut ev = vec![click(1000.0, 100.0, 100.0)];
+        ev.extend((0..10).map(|i| key(6000.0 + i as f64 * 200.0)));
+        let (gw, gh) = (24, 12);
+        let frames: Vec<Vec<u8>> = (0..90)
+            .map(|step| {
+                let mut f = vec![0u8; gw * gh];
+                // From 6.0 s, one more character every 0.2 s.
+                let typed = if step >= 60 {
+                    ((step - 60) / 2 + 1).min(10)
+                } else {
+                    0
+                };
+                for c in 0..typed {
+                    f[8 * gw + 12 + c] = 255;
+                }
+                f
+            })
+            .collect();
+        let a = analyze_frames(frames.iter().map(Vec::as_slice), gw, gh, 1920.0, 1080.0);
+        let z = auto_zoom(&p, &log(ev.clone()), Some(&a));
+        assert_eq!(z.len(), 2);
+        let typing = &z[1];
+        assert!(
+            typing.x > 1000.0 && (typing.y - 765.0).abs() < 1.0,
+            "{typing:?}"
+        );
+        // Without the analysis it falls back to the click.
+        let z = auto_zoom(&p, &log(ev), None);
+        assert_eq!((z[0].x, z[0].y), (100.0, 100.0));
+    }
+
+    #[test]
+    fn bursts_group_keys_that_are_close_together() {
+        let l = log(vec![
+            key(0.0),
+            key(300.0),
+            key(600.0),
+            key(5000.0),
+            key(5100.0),
+        ]);
+        assert_eq!(typing_bursts(&l), vec![vec![0.0, 300.0, 600.0]]);
     }
 
     #[test]
     fn a_couple_of_stray_keys_are_not_typing() {
         let p = project(1920, 1080, 30_000.0);
-        assert!(auto_zoom(&p, &log(vec![key(5000.0), key(5100.0)])).is_empty());
+        assert!(auto_zoom(&p, &log(vec![key(5000.0), key(5100.0)]), None).is_empty());
     }
 
     #[test]
@@ -252,6 +328,7 @@ mod tests {
                 click(2000.0, 100.0, 100.0),
                 click(12_000.0, 900.0, 500.0),
             ]),
+            None,
         );
         assert_eq!(
             z.iter().map(|z| z.id.as_str()).collect::<Vec<_>>(),
@@ -261,7 +338,7 @@ mod tests {
 
         p.auto_zoom.enabled = false;
         assert_eq!(
-            auto_zoom(&p, &log(vec![click(12_000.0, 1.0, 1.0)])).len(),
+            auto_zoom(&p, &log(vec![click(12_000.0, 1.0, 1.0)]), None).len(),
             1
         );
     }
@@ -290,6 +367,7 @@ mod tests {
                 click(10_000.0, 1500.0, 100.0),
                 lone,
             ]),
+            None,
         );
         assert!(z.is_empty(), "{z:?}");
     }
@@ -302,9 +380,9 @@ mod tests {
             click(4000.0, 300.0, 200.0),
             click(4600.0, 900.0, 500.0),
         ]);
-        assert_eq!(auto_zoom(&p, &l).len(), 1);
+        assert_eq!(auto_zoom(&p, &l, None).len(), 1);
         p.auto_zoom.merge_gap_ms = 1000.0;
-        let z = auto_zoom(&p, &l);
+        let z = auto_zoom(&p, &l, None);
         assert_eq!(z.len(), 2, "{z:?}");
         // The first zoom gives up part of its hold to be out in time.
         assert_eq!(z[0].end_ms, 4000.0 - 450.0);
@@ -319,7 +397,7 @@ mod tests {
         let ev: Vec<Event> = (0..30)
             .map(|i| click(1000.0 + i as f64 * 1700.0, 500.0, 500.0))
             .collect();
-        let z = auto_zoom(&p, &log(ev));
+        let z = auto_zoom(&p, &log(ev), None);
         for w in z.windows(2) {
             assert!(w[0].end_ms <= w[1].start_ms, "{w:?}");
         }

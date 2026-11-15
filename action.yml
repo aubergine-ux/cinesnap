@@ -1,0 +1,205 @@
+name: Cinesnap scripted demo
+description: Record a scripted browser demo and render it with Cinesnap, to keep a README video up to date.
+author: aubergine-ux
+branding:
+  icon: film
+  color: purple
+
+inputs:
+  script:
+    description: Path to the demo script (YAML or JSON), relative to working-directory.
+    required: true
+  output:
+    description: File to render, relative to working-directory. The extension picks the format (.gif or .mp4).
+    default: docs/demo.gif
+  preset:
+    description: Cinesnap render preset. Leave empty to use the format's default.
+    default: readme
+  version:
+    description: Cinesnap release to render with, such as v0.2.0, or latest.
+    default: latest
+  commit:
+    description: Commit the rendered file back to the checked-out branch when it changed (true or false).
+    default: "true"
+  commit-message:
+    description: Message for that commit.
+    default: "docs: regenerate demo"
+  working-directory:
+    description: Directory to run in, relative to the workspace.
+    default: "."
+
+outputs:
+  path:
+    description: The rendered file, relative to the workspace.
+    value: ${{ steps.render.outputs.path }}
+  changed:
+    description: Whether the rendered file differs from what is checked in (true or false).
+    value: ${{ steps.result.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Install ffmpeg
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v ffmpeg >/dev/null 2>&1; then
+          echo "ffmpeg is already installed"
+          exit 0
+        fi
+        case "$RUNNER_OS" in
+          Linux)
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+            ;;
+          macOS)
+            brew install ffmpeg
+            ;;
+          Windows)
+            choco install ffmpeg -y --no-progress
+            ;;
+          *)
+            echo "::error::no ffmpeg on this runner and no known way to install it"
+            exit 1
+            ;;
+        esac
+
+    - name: Install the Cinesnap CLI
+      shell: bash
+      env:
+        CINESNAP_VERSION: ${{ inputs.version }}
+        REPO: https://github.com/aubergine-ux/cinesnap
+      run: |
+        set -euo pipefail
+        version="$CINESNAP_VERSION"
+        if [ -z "$version" ]; then version=latest; fi
+        case "$version" in
+          latest | v*) ;;
+          *) version="v$version" ;;
+        esac
+        case "$version" in
+          *[!A-Za-z0-9._-]*)
+            echo "::error::version '$version' is not a release tag"
+            exit 1
+            ;;
+        esac
+
+        case "$RUNNER_OS" in
+          Linux) os=linux ;;
+          macOS) os=macos ;;
+          Windows) os=windows ;;
+          *) os=unknown ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64) arch=x64 ;;
+          ARM64) arch=arm64 ;;
+          *) arch=unknown ;;
+        esac
+        exe=""
+        if [ "$os" = windows ]; then exe=".exe"; fi
+
+        dir="$RUNNER_TEMP/cinesnap-cli"
+        mkdir -p "$dir"
+        bin="$dir/cinesnap-cli$exe"
+        asset="cinesnap-cli-$os-$arch$exe"
+        if [ "$version" = latest ]; then
+          url="$REPO/releases/latest/download/$asset"
+        else
+          url="$REPO/releases/download/$version/$asset"
+        fi
+
+        if curl -fsSL --retry 3 --retry-delay 2 -o "$bin" "$url"; then
+          chmod +x "$bin"
+          echo "downloaded $asset ($version)"
+        else
+          # No prebuilt binary for this release or platform: build it.
+          echo "::notice::no $asset in the $version release, building cinesnap-cli from source"
+          rm -f "$bin"
+          if ! command -v cargo >/dev/null 2>&1; then
+            echo "::error::no prebuilt cinesnap-cli for $os-$arch and no Rust toolchain to build it"
+            exit 1
+          fi
+          if [ "$os" = linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends libclang-dev cmake
+          fi
+          args=(install --git "$REPO" cinesnap-core --bin cinesnap-cli --locked --root "$dir/root")
+          if [ "$version" != latest ]; then args+=(--tag "$version"); fi
+          cargo "${args[@]}"
+          cp "$dir/root/bin/cinesnap-cli$exe" "$bin"
+        fi
+
+        "$bin" --version
+        echo "CINESNAP_BIN=$bin" >> "$GITHUB_ENV"
+
+    - name: Install the script runner
+      shell: bash
+      working-directory: ${{ github.action_path }}/scripted
+      run: |
+        set -euo pipefail
+        npm ci --omit=dev --no-audit --no-fund
+        npx playwright install --with-deps chromium
+
+    - name: Record and render
+      id: render
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        DEMO_SCRIPT: ${{ inputs.script }}
+        DEMO_OUTPUT: ${{ inputs.output }}
+        DEMO_PRESET: ${{ inputs.preset }}
+        RUNNER_DIR: ${{ github.action_path }}/scripted
+      run: |
+        set -euo pipefail
+        args=(run "$DEMO_SCRIPT" --render "$DEMO_OUTPUT")
+        if [ -n "$DEMO_PRESET" ]; then args+=(--preset "$DEMO_PRESET"); fi
+        node "$RUNNER_DIR/bin/cinesnap-script.mjs" "${args[@]}"
+        rel="$(node -e 'const p = require("path"); console.log(p.relative(process.env.GITHUB_WORKSPACE, p.resolve(process.env.DEMO_OUTPUT)).split(p.sep).join("/"))')"
+        echo "path=$rel" >> "$GITHUB_OUTPUT"
+
+    - name: Commit the result
+      id: result
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        DEMO_OUTPUT: ${{ inputs.output }}
+        DO_COMMIT: ${{ inputs.commit }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+      run: |
+        set -euo pipefail
+        if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          if [ "$DO_COMMIT" = true ]; then
+            echo "::error::commit is on, but this is not a git checkout; run actions/checkout first"
+            exit 1
+          fi
+          exit 0
+        fi
+
+        if [ -z "$(git status --porcelain -- "$DEMO_OUTPUT")" ]; then
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          echo "$DEMO_OUTPUT is unchanged"
+          exit 0
+        fi
+        echo "changed=true" >> "$GITHUB_OUTPUT"
+        if [ "$DO_COMMIT" != true ]; then exit 0; fi
+
+        branch="$(git symbolic-ref --quiet --short HEAD || true)"
+        if [ -z "$branch" ]; then
+          echo "::error::cannot commit from a detached HEAD; check out a branch (actions/checkout with 'ref: main'), or set 'commit: false'"
+          exit 1
+        fi
+
+        git add -- "$DEMO_OUTPUT"
+        git -c user.name="github-actions[bot]" \
+          -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+          commit -m "$COMMIT_MESSAGE" -- "$DEMO_OUTPUT"
+        # Someone may have pushed while the demo was recording.
+        if ! git push origin "HEAD:refs/heads/$branch"; then
+          git pull --rebase origin "$branch"
+          git push origin "HEAD:refs/heads/$branch"
+        fi

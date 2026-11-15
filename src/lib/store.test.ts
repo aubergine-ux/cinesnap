@@ -25,6 +25,29 @@ describe("editor store", () => {
     expect(s().past).toHaveLength(0);
   });
 
+  it("adds a marker at the playhead, renames, moves and deletes it", () => {
+    const before = s().project!.markers.length;
+    s().seekSource(5000);
+    const at = s().sourceTime();
+    s().addMarker();
+    s().addMarker();
+    expect(s().project!.markers).toHaveLength(before + 1);
+    const sel = s().selection;
+    expect(sel?.kind).toBe("marker");
+    const id = sel?.kind === "marker" ? sel.id : "";
+    expect(s().project!.markers.find((m) => m.id === id)!.atMs).toBe(Math.round(at));
+
+    s().editMarker(id, { label: "Install" }, "label");
+    s().editMarker(id, { atMs: 100 }, "move");
+    const m = s().project!.markers;
+    expect(m[0]).toMatchObject({ id, label: "Install", atMs: 100 });
+
+    s().deleteSelection();
+    expect(s().project!.markers).toHaveLength(before);
+    s().undo();
+    expect(s().project!.markers).toHaveLength(before + 1);
+  });
+
   it("adds, edits and deletes a zoom, each as an undo step", () => {
     const before = zoomCount();
     const duration = s().project!.source.video.durationMs;

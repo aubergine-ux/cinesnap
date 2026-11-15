@@ -1,18 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { Segmented, Select, Toggle } from "../components/controls";
+import { HotkeySettings } from "../components/HotkeySettings";
 import { api, errorMessage } from "../lib/api";
 import { useStore } from "../lib/store";
 import { formatTime } from "../lib/timeline";
+import { DEFAULT_HOTKEYS, hotkeyLabel } from "../lib/hotkeys";
 import type { Rect, RecordingOptions } from "../lib/types";
 
 const NONE = "__none__";
 
+function targetValue(t: RecordingOptions["target"] | undefined): string {
+  if (!t) return "";
+  return t.kind === "portal" || t.kind === "all" ? t.kind : `${t.kind}:${t.id ?? ""}`;
+}
+
 export function Home() {
-  const { capabilities, sources, recent, refreshHome, openProject, setScreen, setError } = useStore();
-  const [target, setTarget] = useState<string>("");
-  const [mic, setMic] = useState(NONE);
-  const [webcam, setWebcam] = useState(NONE);
-  const [fps, setFps] = useState(60);
+  const { capabilities, sources, recent, refreshHome, openProject, setError, settings, startRecording } = useStore();
+  const last = settings.record;
+  const [target, setTarget] = useState<string>(targetValue(last?.target));
+  const [mic, setMic] = useState(last?.mic ?? NONE);
+  const [webcam, setWebcam] = useState(last?.webcam ?? NONE);
+  const [sound, setSound] = useState(last?.appAudio ? `app:${last.appAudio}` : (last?.systemAudio ?? NONE));
+  const [fps, setFps] = useState(last?.fps ?? 60);
+  const [vfr, setVfr] = useState(last?.vfr ?? true);
+  const [countdown, setCountdown] = useState(last?.countdown ?? 0);
+  const [shortcuts, setShortcuts] = useState(last?.shortcuts ?? true);
   const [useRegion, setUseRegion] = useState(false);
   const [region, setRegion] = useState<Rect>({ x: 0, y: 0, width: 1280, height: 720 });
   const [starting, setStarting] = useState(false);
@@ -21,11 +33,23 @@ export function Home() {
   const targets = useMemo(() => {
     if (!sources) return [];
     if (sources.portal) return [{ value: "portal", label: "Screen or window (chosen in system dialog)" }];
+    const hdr = (on: boolean) => (on ? " · HDR" : "");
     return [
-      ...sources.screens.map((s) => ({ value: `screen:${s.id}`, label: `${s.name} — ${s.width}×${s.height}` })),
+      ...sources.screens.map((s) => ({ value: `screen:${s.id}`, label: `${s.name} — ${s.width}×${s.height}${hdr(s.hdr)}` })),
+      ...(sources.screens.length > 1 ? [{ value: "all", label: `All ${sources.screens.length} screens` }] : []),
       ...sources.windows.map((w) => ({ value: `window:${w.id}`, label: `Window: ${w.title}` })),
     ];
   }, [sources]);
+
+  const sounds = useMemo(() => {
+    const outputs = (sources?.outputs ?? []).map((o) => ({ value: o.id, label: o.name }));
+    const apps = (sources?.apps ?? []).map((a) => ({ value: `app:${a.id}`, label: `Only ${a.name}` }));
+    return [{ value: NONE, label: "Off" }, ...outputs, ...apps];
+  }, [sources]);
+
+  useEffect(() => {
+    if (!sounds.some((o) => o.value === sound)) setSound(NONE);
+  }, [sounds, sound]);
 
   useEffect(() => {
     if (targets.length && !targets.some((t) => t.value === target)) setTarget(targets[0].value);
@@ -38,24 +62,30 @@ export function Home() {
   }, [target, sources]);
 
   const regionAllowed = target === "portal" || target.startsWith("screen:");
+  const slowEncoder = capabilities?.encoder === "libx264" && fps > 60;
+  const keys = { ...DEFAULT_HOTKEYS, ...settings.hotkeys };
   const ffmpegMissing = capabilities !== null && capabilities.ffmpeg === null;
 
   const record = async () => {
     if (!target || starting) return;
-    const [kind, id] = target === "portal" ? ["portal", undefined] : (target.split(/:(.*)/s) as [string, string]);
+    const [kind, id] = target === "portal" || target === "all" ? [target, undefined] : (target.split(/:(.*)/s) as [string, string]);
+    const app = sound.startsWith("app:") ? sound.slice(4) : null;
     const options: RecordingOptions = {
       target: { kind: kind as RecordingOptions["target"]["kind"], ...(id !== undefined ? { id } : {}) },
       region: useRegion && regionAllowed ? region : null,
       mic: mic === NONE ? null : mic,
       webcam: webcam === NONE ? null : webcam,
+      systemAudio: sound === NONE || app ? null : sound,
+      appAudio: app,
+      appName: app ? (sources?.apps.find((a) => a.id === app)?.name.split(" — ")[0] ?? null) : null,
       fps,
+      vfr,
+      countdown,
+      shortcuts,
     };
     setStarting(true);
     try {
-      await api.startRecording(options);
-      setScreen("recording");
-    } catch (e) {
-      setError(errorMessage(e));
+      await startRecording(options);
     } finally {
       setStarting(false);
     }
@@ -146,22 +176,69 @@ export function Home() {
           </div>
         </div>
 
+        <div className="field">
+          <span className="field-label">Sound from the computer</span>
+          <Select value={sound} options={sounds} onChange={setSound} />
+        </div>
+
         <div className="field inline">
           <span className="field-label">Frame rate</span>
           <Segmented
             value={fps}
             onChange={setFps}
             options={[
-              { value: 30, label: "30 fps" },
-              { value: 60, label: "60 fps" },
+              { value: 30, label: "30" },
+              { value: 60, label: "60" },
+              { value: 120, label: "120" },
             ]}
           />
+        </div>
+        {slowEncoder && <p className="note">No hardware encoder was found; 120 fps at high resolutions may drop frames.</p>}
+
+        <div className="field inline">
+          <span className="field-label">Countdown</span>
+          <Segmented
+            value={countdown}
+            onChange={setCountdown}
+            options={[
+              { value: 0, label: "Off" },
+              { value: 3, label: "3 s" },
+              { value: 5, label: "5 s" },
+              { value: 10, label: "10 s" },
+            ]}
+          />
+        </div>
+
+        <div className="field inline">
+          <span className="field-label" title="Frames where nothing on screen changed are left out, so idle moments take almost no space.">
+            Skip unchanged frames
+          </span>
+          <Toggle label="" value={vfr} onChange={setVfr} />
+        </div>
+
+        <div className="field inline">
+          <span className="field-label" title="Shortcuts such as Ctrl+K and keys like Enter can be shown in the video. Text you type is never recorded.">
+            Record shortcuts
+          </span>
+          <Toggle label="" value={shortcuts} onChange={setShortcuts} />
         </div>
 
         <button className="record" disabled={!target || starting || ffmpegMissing} onClick={record}>
           <span className="dot" />
           {starting ? "Starting…" : "Start recording"}
         </button>
+        <p className="hint keys">
+          <span>
+            <kbd>{hotkeyLabel(keys.toggle)}</kbd> start / stop
+          </span>
+          <span>
+            <kbd>{hotkeyLabel(keys.pause)}</kbd> pause
+          </span>
+          <span>
+            <kbd>{hotkeyLabel(keys.marker)}</kbd> marker
+          </span>
+        </p>
+        <HotkeySettings />
 
         {notes.map((n) => (
           <p className="note" key={n}>

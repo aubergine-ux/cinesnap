@@ -114,3 +114,63 @@ export function ColorInput({ label, value, onChange }: { label: string; value: s
     </div>
   );
 }
+
+export function TextInput({ label, value, placeholder, onChange, type = "text" }: { label: string; value: string; placeholder?: string; onChange: (v: string) => void; type?: "text" | "password" | "url" }) {
+  return (
+    <label className="stack">
+      <span className="row-label">{label}</span>
+      <input className="text-input" type={type} value={value} placeholder={placeholder} spellCheck={false} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+}
+
+export function TextArea({ label, value, rows = 2, onChange }: { label: string; value: string; rows?: number; onChange: (v: string) => void }) {
+  return (
+    <label className="stack">
+      <span className="row-label">{label}</span>
+      <textarea className="text-input" rows={rows} value={value} spellCheck={false} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+}
+
+export function SelectRow({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string }[]; onChange: (v: string) => void }) {
+  return (
+    <div className="row">
+      <span className="row-label">{label}</span>
+      <Select value={value} options={options} onChange={onChange} />
+    </div>
+  );
+}
+
+/** Colour with optional transparency (#rrggbbaa keeps its alpha when the hue changes). */
+export function AlphaColorInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const rgb = /^#[0-9a-f]{6}/i.test(value) ? value.slice(0, 7) : "#000000";
+  const alpha = /^#[0-9a-f]{8}$/i.test(value) ? parseInt(value.slice(7), 16) / 255 : 1;
+  const join = (c: string, a: number) => (a >= 0.995 ? c : `${c}${Math.round(a * 255).toString(16).padStart(2, "0")}`);
+  return (
+    <>
+      <ColorInput label={label} value={rgb} onChange={(c) => onChange(join(c, alpha))} />
+      <Slider label={`${label} opacity`} value={alpha} min={0.1} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} onChange={(a) => onChange(join(rgb, a))} />
+    </>
+  );
+}
+
+/** A progress bar for a background job, with a cancel button. */
+export function JobBar({ label, fraction, onCancel }: { label: string; fraction: number; onCancel?: () => void }) {
+  return (
+    <div className="job">
+      <div className="job-top">
+        <span>{label}</span>
+        <span className="slider-value">{Math.round(fraction * 100)}%</span>
+        {onCancel && (
+          <button className="btn small" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+      </div>
+      <div className="progress">
+        <span style={{ width: `${Math.max(0, Math.min(1, fraction)) * 100}%` }} />
+      </div>
+    </div>
+  );
+}
