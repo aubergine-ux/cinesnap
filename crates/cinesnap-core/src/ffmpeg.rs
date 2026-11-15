@@ -143,6 +143,27 @@ impl Encoder {
         }
     }
 
+    /// The pixel format the encoder is fed.
+    pub fn pix_fmt(self) -> &'static str {
+        match self {
+            Self::Qsv | Self::Vaapi => "nv12",
+            _ => "yuv420p",
+        }
+    }
+
+    /// Filters that drop frames identical to the one before, for a variable
+    /// frame rate recording. The conversion to the encoder's format happens
+    /// first: it is needed anyway, and comparing planar frames is cheap.
+    /// Four frames a second are always kept, so the file still ends within
+    /// a quarter second of when recording stopped.
+    pub fn decimate(self, fps: u32) -> Vec<String> {
+        let max_dropped = (fps / 4).saturating_sub(1).max(1);
+        vec![
+            format!("format={}", self.pix_fmt()),
+            format!("mpdecimate=hi=200:lo=64:frac=0.05:max={max_dropped}"),
+        ]
+    }
+
     /// The video filter that must end the filter chain, if any.
     pub fn filter(self) -> Option<&'static str> {
         match self {
@@ -554,6 +575,16 @@ pub fn remove_file_patiently(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimation_converts_first_and_keeps_four_frames_a_second() {
+        assert_eq!(
+            Encoder::X264.decimate(60),
+            ["format=yuv420p", "mpdecimate=hi=200:lo=64:frac=0.05:max=14"]
+        );
+        assert_eq!(Encoder::Qsv.decimate(120)[0], "format=nv12");
+        assert!(Encoder::Nvenc.decimate(5)[1].ends_with("max=1"));
+    }
 
     #[test]
     fn parses_ffmpeg_info() {
