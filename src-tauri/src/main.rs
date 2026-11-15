@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod devices;
+#[cfg(target_os = "windows")]
+mod dxgi;
+mod hotkeys;
 mod media;
 mod recorder;
 
@@ -19,14 +22,17 @@ use cinesnap_core::project::{Project, Transcript, Zoom, PROJECT_FILE};
 use cinesnap_core::share::{self, Shared};
 use cinesnap_core::transcript::{self, Suggestion};
 use cinesnap_core::{audio, music, presets, transcribe};
-use recorder::{RecordOptions, Recording};
+use recorder::{RecordOptions, Session, Target};
 use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 #[derive(Default)]
 struct AppState {
-    recording: Mutex<Option<Recording>>,
+    recording: Mutex<Option<Session>>,
+    /// When the pointer went onto the control bar, if it is still there:
+    /// stopping from the bar cuts the reach for it.
+    bar_hover: Mutex<Option<Instant>>,
     /// Guards against two overlapping `start_recording` calls.
     starting: AtomicBool,
     encoder: Mutex<Option<Encoder>>,
@@ -210,70 +216,292 @@ fn list_sources(app: AppHandle) -> devices::Sources {
     devices::sources(find_ffmpeg(&app).ok().as_deref())
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RecordingStatus {
+    elapsed_ms: f64,
+    paused: bool,
+    countdown_ms: f64,
+    segments: usize,
+}
+
+fn status(s: &Session) -> RecordingStatus {
+    RecordingStatus {
+        elapsed_ms: s.elapsed_ms(),
+        paused: s.is_paused(),
+        countdown_ms: s.countdown_ms(),
+        segments: s.segments(),
+    }
+}
+
+/// Bindings from the settings, applied to every window's hotkeys.
+fn install_hotkeys(app: &AppHandle) -> Vec<String> {
+    let bindings = hotkeys::Bindings::from_settings(&get_settings(app.clone()));
+    let handle = app.clone();
+    hotkeys::install(
+        app,
+        &bindings,
+        Arc::new(move |action| on_hotkey(&handle, action)),
+    )
+}
+
+fn on_hotkey(app: &AppHandle, action: hotkeys::Action) {
+    use hotkeys::Action;
+    let state = app.state::<AppState>();
+    let recording = state.recording.lock().unwrap().is_some();
+    match action {
+        Action::Toggle if recording => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = finish_recording(&app, false);
+            });
+        }
+        // Starting needs the options chosen on the home screen.
+        Action::Toggle => {
+            let _ = app.emit_to("main", "hotkey://start", ());
+        }
+        Action::Pause if recording => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let paused = with_session(&app, |s| Ok(s.is_paused())).unwrap_or(false);
+                let result = if paused {
+                    with_session(&app, Session::resume)
+                } else {
+                    with_session(&app, Session::pause)
+                };
+                if let Err(e) = result {
+                    let _ = app.emit("recording://error", e);
+                }
+            });
+        }
+        Action::Marker if recording => {
+            let _ = with_session(app, |s| {
+                s.marker();
+                Ok(())
+            });
+            let _ = app.emit("recording://marker", ());
+        }
+        _ => {}
+    }
+}
+
+fn with_session<T>(
+    app: &AppHandle,
+    f: impl FnOnce(&mut Session) -> anyhow::Result<T>,
+) -> CmdResult<T> {
+    let state = app.state::<AppState>();
+    let mut guard = state.recording.lock().unwrap();
+    let session = guard.as_mut().ok_or("nothing is being recorded")?;
+    f(session).map_err(err)
+}
+
+const BAR: &str = "bar";
+
+/// The floating control bar. Windows and macOS keep it out of the recording;
+/// elsewhere it is put on a screen that is not being recorded when there is
+/// one.
+fn open_bar(app: &AppHandle, avoid: &[(i32, i32, u32, u32)]) {
+    use tauri::{PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+    let Ok(bar) = WebviewWindowBuilder::new(app, BAR, WebviewUrl::App("index.html#bar".into()))
+        .title("Cinesnap")
+        .inner_size(392.0, 52.0)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .content_protected(true)
+        .visible_on_all_workspaces(true)
+        .focused(false)
+        .build()
+    else {
+        return;
+    };
+    let screens = devices::screens();
+    let free = screens.iter().find(|s| {
+        !avoid.iter().any(|&(x, y, w, h)| {
+            s.x < x + w as i32
+                && x < s.x + s.width as i32
+                && s.y < y + h as i32
+                && y < s.y + s.height as i32
+        })
+    });
+    let excluded = !cfg!(target_os = "linux");
+    let screen = if excluded { None } else { free }
+        .or_else(|| {
+            screens
+                .iter()
+                .find(|s| avoid.first().is_some_and(|a| (s.x, s.y) == (a.0, a.1)))
+        })
+        .or(screens.first());
+    if let (Some(s), Ok(size)) = (screen, bar.outer_size()) {
+        let x = s.x + (s.width as i32 - size.width as i32) / 2;
+        let _ = bar.set_position(PhysicalPosition::new(x, s.y + 16));
+    }
+}
+
+fn close_bar(app: &AppHandle) {
+    if let Some(bar) = app.get_webview_window(BAR) {
+        let _ = bar.destroy();
+    }
+}
+
+/// Whether the bar would show up in the recording (no way to exclude it,
+/// and no other screen to put it on).
+fn bar_in_picture(avoid: &[(i32, i32, u32, u32)]) -> bool {
+    cfg!(target_os = "linux") && (devices::is_wayland() || devices::screens().len() <= avoid.len())
+}
+
 #[tauri::command(async)]
 fn start_recording(
     app: AppHandle,
     state: State<AppState>,
-    options: RecordOptions,
+    mut options: RecordOptions,
 ) -> CmdResult<()> {
     if state.recording.lock().unwrap().is_some() || state.starting.swap(true, Ordering::SeqCst) {
         return Err("a recording is already in progress".into());
     }
-    let result: CmdResult<()> = (|| {
+    #[cfg(target_os = "linux")]
+    if devices::is_wayland() {
+        install_hotkeys(&app);
+    }
+    let settings = get_settings(app.clone());
+    options.hidden_combos = hotkeys::Bindings::from_settings(&settings).labels();
+    let keep_bar = settings["keepBarVisible"].as_bool().unwrap_or(false);
+    let result: CmdResult<Vec<(i32, i32, u32, u32)>> = (|| {
         let ffmpeg = find_ffmpeg(&app)?;
         let enc = encoder(&state, &ffmpeg);
         let name = chrono::Local::now()
             .format("Recording %Y-%m-%d %H.%M.%S.cinesnap")
             .to_string();
         let dir = recordings_dir(&app)?.join(name);
-        let recording = Recording::start(&ffmpeg, enc, &dir, &options).map_err(err)?;
-        *state.recording.lock().unwrap() = Some(recording);
-        Ok(())
+        let session = Session::start(&ffmpeg, enc, &dir, options).map_err(err)?;
+        let screens = session.screens();
+        *state.recording.lock().unwrap() = Some(session);
+        Ok(screens)
     })();
     state.starting.store(false, Ordering::SeqCst);
-    result?;
+    let screens = result?;
 
-    // Get out of the picture; the user brings the window back to stop.
+    // Get out of the picture; the bar and the hotkeys take over.
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.minimize();
     }
+    open_bar(&app, &screens);
+    let hide_bar_after = (bar_in_picture(&screens) && !keep_bar).then_some(());
     std::thread::spawn(move || loop {
-        let elapsed = app
+        let current = app
             .state::<AppState>()
             .recording
             .lock()
             .unwrap()
             .as_ref()
-            .map(|r| r.elapsed_ms());
-        match elapsed {
-            Some(ms) => {
-                let _ = app.emit("recording://tick", json!({ "elapsedMs": ms }));
+            .map(status);
+        let Some(st) = current else { break };
+        // A bar that would be filmed only stays for the countdown.
+        if hide_bar_after.is_some() && st.elapsed_ms > st.countdown_ms + 300.0 {
+            if let Some(bar) = app.get_webview_window(BAR) {
+                if bar.is_visible().unwrap_or(false) {
+                    let _ = bar.hide();
+                }
             }
-            None => break,
         }
+        let _ = app.emit("recording://tick", st);
         std::thread::sleep(Duration::from_millis(200));
     });
     Ok(())
 }
 
-#[tauri::command(async)]
-fn stop_recording(app: AppHandle, state: State<AppState>) -> CmdResult<String> {
-    let recording = state
+/// Stop, assemble the project and tell every window. `from_bar` means the
+/// stop button on the bar, so the reach for it is cut.
+fn finish_recording(app: &AppHandle, from_bar: bool) -> CmdResult<String> {
+    let state = app.state::<AppState>();
+    let hover = state.bar_hover.lock().unwrap().take();
+    let mut session = state
         .recording
         .lock()
         .unwrap()
         .take()
         .ok_or("nothing is being recorded")?;
-    let ffmpeg = find_ffmpeg(&app)?;
-    let dir = recording.stop(&ffmpeg).map_err(err)?;
-    Ok(dir.display().to_string())
+    if from_bar {
+        session.tail_from = hover.or(session.tail_from);
+    }
+    close_bar(app);
+    let result = session.stop().map_err(err);
+    match &result {
+        Ok(dir) => {
+            let _ = app.emit("recording://stopped", dir.display().to_string());
+        }
+        Err(e) => {
+            let _ = app.emit("recording://error", e.clone());
+        }
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    result.map(|d| d.display().to_string())
 }
 
 #[tauri::command(async)]
-fn cancel_recording(state: State<AppState>) {
-    if let Some(recording) = state.recording.lock().unwrap().take() {
-        recording.cancel();
+fn stop_recording(app: AppHandle, from_bar: Option<bool>) -> CmdResult<String> {
+    finish_recording(&app, from_bar.unwrap_or(false))
+}
+
+#[tauri::command(async)]
+fn cancel_recording(app: AppHandle, state: State<AppState>) {
+    if let Some(session) = state.recording.lock().unwrap().take() {
+        session.cancel();
     }
+    close_bar(&app);
+    let _ = app.emit("recording://cancelled", ());
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+    }
+}
+
+#[tauri::command(async)]
+fn pause_recording(app: AppHandle) -> CmdResult<RecordingStatus> {
+    with_session(&app, |s| {
+        s.pause()?;
+        Ok(status(s))
+    })
+}
+
+#[tauri::command(async)]
+fn resume_recording(app: AppHandle) -> CmdResult<RecordingStatus> {
+    with_session(&app, |s| {
+        s.resume()?;
+        Ok(status(s))
+    })
+}
+
+#[tauri::command]
+fn add_marker(app: AppHandle) -> CmdResult<()> {
+    with_session(&app, |s| {
+        s.marker();
+        Ok(())
+    })
+}
+
+/// Record another screen or window from now on.
+#[tauri::command(async)]
+fn switch_target(app: AppHandle, target: Target) -> CmdResult<()> {
+    with_session(&app, |s| s.switch(target))
+}
+
+#[tauri::command]
+fn bar_hover(state: State<AppState>, inside: bool) {
+    *state.bar_hover.lock().unwrap() = inside.then(Instant::now);
+}
+
+#[tauri::command(async)]
+fn recording_status(state: State<AppState>) -> Option<RecordingStatus> {
+    state.recording.lock().unwrap().as_ref().map(status)
+}
+
+#[tauri::command(async)]
+fn apply_hotkeys(app: AppHandle) -> Vec<String> {
+    install_hotkeys(&app)
 }
 
 #[derive(Serialize)]
@@ -650,13 +878,16 @@ fn webkit_workarounds() {
     }
 }
 
-/// `cinesnap record <dir> [--seconds N] [--fps N] [--mic ID] [--webcam ID]`:
-/// record without opening the window. Handy for scripts and for checking
-/// that capture works on a machine.
+const RECORD_USAGE: &str = "usage: cinesnap record <dir.cinesnap> [--seconds N] [--fps N] [--cfr] \
+    [--all-screens] [--mic ID] [--system ID] [--webcam ID] [--pause-at N]";
+
+/// `cinesnap record <dir> …`: record without opening the window. Handy for
+/// scripts and for checking that capture works on a machine.
 fn headless_record(args: &[String]) -> anyhow::Result<()> {
     use anyhow::Context;
     let mut dir = None;
     let (mut seconds, mut fps, mut mic, mut webcam) = (5.0f64, 60u32, None, None);
+    let (mut system_audio, mut vfr, mut target, mut pause_at) = (None, true, "screen", None);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || it.next().with_context(|| format!("{arg} needs a value"));
@@ -664,40 +895,65 @@ fn headless_record(args: &[String]) -> anyhow::Result<()> {
             "--seconds" => seconds = value()?.parse()?,
             "--fps" => fps = value()?.parse()?,
             "--mic" => mic = Some(value()?.clone()),
+            "--system" => system_audio = Some(value()?.clone()),
             "--webcam" => webcam = Some(value()?.clone()),
+            "--pause-at" => pause_at = Some(value()?.parse::<f64>()?),
+            "--cfr" => vfr = false,
+            "--all-screens" => target = "all",
+            other if other.starts_with("--") => {
+                anyhow::bail!("unknown option {other}\n{RECORD_USAGE}")
+            }
             other => dir = Some(PathBuf::from(other)),
         }
     }
-    let dir = dir.context(
-        "usage: cinesnap record <dir.cinesnap> [--seconds N] [--fps N] [--mic ID] [--webcam ID]",
-    )?;
+    let dir = dir.context(RECORD_USAGE)?;
     anyhow::ensure!(
         seconds.is_finite() && seconds > 0.0 && seconds <= 86_400.0,
         "--seconds must be a positive number"
     );
     let ffmpeg = ffmpeg::locate(None).context("ffmpeg not found")?;
-    let (wants_mic, wants_webcam) = (mic.is_some(), webcam.is_some());
+    let (wants_mic, wants_webcam, wants_system) =
+        (mic.is_some(), webcam.is_some(), system_audio.is_some());
     let options = RecordOptions {
-        target: recorder::Target {
-            kind: "screen".into(),
+        target: Target {
+            kind: target.into(),
             id: None,
         },
         region: None,
         mic,
         webcam,
+        system_audio,
+        app_audio: None,
+        app_name: None,
         fps,
+        vfr,
+        countdown: 0,
         shortcuts: true,
+        hidden_combos: vec![],
     };
-    let recording = Recording::start(&ffmpeg, Encoder::detect(&ffmpeg), &dir, &options)?;
+    let mut session = Session::start(&ffmpeg, Encoder::detect(&ffmpeg), &dir, options)?;
     eprintln!("recording for {seconds} s…");
-    std::thread::sleep(Duration::from_secs_f64(seconds));
-    let dir = recording.stop(&ffmpeg)?;
+    match pause_at {
+        Some(at) if at < seconds => {
+            std::thread::sleep(Duration::from_secs_f64(at));
+            session.pause()?;
+            eprintln!("paused for 1 s…");
+            std::thread::sleep(Duration::from_secs(1));
+            session.resume()?;
+            std::thread::sleep(Duration::from_secs_f64(seconds - at));
+        }
+        _ => std::thread::sleep(Duration::from_secs_f64(seconds)),
+    }
+    let dir = session.stop()?;
     let source = Project::load(&dir)?.source;
     if wants_mic && source.mic.is_none() {
         eprintln!("warning: the microphone delivered no audio and was left out");
     }
     if wants_webcam && source.webcam.is_none() {
         eprintln!("warning: the webcam delivered no video and was left out");
+    }
+    if wants_system && source.system.is_none() {
+        eprintln!("warning: no system sound was played, so there is no system track");
     }
     println!("{}", dir.display());
     Ok(())
@@ -727,8 +983,13 @@ fn doctor() {
     }
     for s in &sources.screens {
         println!(
-            "screen    {} {}x{} at {},{}",
-            s.name, s.width, s.height, s.x, s.y
+            "screen    {} {}x{} at {},{}{}",
+            s.name,
+            s.width,
+            s.height,
+            s.x,
+            s.y,
+            if s.hdr { " (HDR)" } else { "" }
         );
     }
     println!("windows   {}", sources.windows.len());
@@ -737,6 +998,12 @@ fn doctor() {
     }
     for d in &sources.webcams {
         println!("webcam    {}", d.name);
+    }
+    for d in &sources.outputs {
+        println!("output    {} ({})", d.name, d.id);
+    }
+    for d in &sources.apps {
+        println!("app       {} ({})", d.name, d.id);
     }
     for n in notes {
         println!("note      {n}");
@@ -771,6 +1038,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState {
             // GStreamer (behind WebKitGTK's <video>) cannot read asset:// URLs.
             media_base: if cfg!(target_os = "linux") {
@@ -780,8 +1048,18 @@ fn main() {
             },
             ..Default::default()
         })
+        .setup(|app| {
+            // The portal asks the desktop to confirm; that waits for the
+            // first recording instead of greeting every start.
+            if !devices::is_wayland() {
+                for note in install_hotkeys(app.handle()) {
+                    eprintln!("hotkeys: {note}");
+                }
+            }
+            Ok(())
+        })
         .on_window_event(|window, event| match event {
-            WindowEvent::Focused(true) => {
+            WindowEvent::Focused(true) if window.label() == "main" => {
                 let state = window.state::<AppState>();
                 let mut recording = state.recording.lock().unwrap();
                 if let Some(r) = recording.as_mut() {
@@ -790,10 +1068,11 @@ fn main() {
                     }
                 }
             }
-            WindowEvent::Destroyed => {
+            WindowEvent::Destroyed if window.label() == "main" => {
                 if let Some(r) = window.state::<AppState>().recording.lock().unwrap().take() {
                     r.cancel();
                 }
+                close_bar(window.app_handle());
             }
             _ => {}
         })
@@ -804,6 +1083,13 @@ fn main() {
             start_recording,
             stop_recording,
             cancel_recording,
+            pause_recording,
+            resume_recording,
+            add_marker,
+            switch_target,
+            bar_hover,
+            recording_status,
+            apply_hotkeys,
             list_recent,
             initial_project,
             open_project,
