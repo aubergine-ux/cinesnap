@@ -19,6 +19,7 @@ pub enum Action {
 impl Action {
     pub const ALL: [Action; 3] = [Self::Toggle, Self::Pause, Self::Marker];
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn id(self) -> &'static str {
         match self {
             Self::Toggle => "toggle",
