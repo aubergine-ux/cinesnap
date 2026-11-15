@@ -251,6 +251,7 @@ fn clips_cards_transitions_annotations_and_sound() {
     p.main_mut().source.mic = Some(AudioTrack {
         file: "mic.wav".into(),
         offset_ms: 0.0,
+        app: None,
     });
 
     // Keep four seconds of each recording, joined by a crossfade, behind a

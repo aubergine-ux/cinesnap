@@ -363,8 +363,11 @@ pub fn generate(dir: &Path, ffmpeg: &Path, opts: &SynthOptions) -> Result<Projec
                 height: opts.height,
                 fps: opts.fps as f64,
                 duration_ms,
+                vfr: false,
+                hdr: None,
             },
             mic: None,
+            system: None,
             webcam: None,
             events: FileRef {
                 file: EVENTS_FILE.into(),

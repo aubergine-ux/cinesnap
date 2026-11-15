@@ -1,0 +1,213 @@
+{
+  "format": "cinesnap-project",
+  "version": 2,
+  "createdAt": "2026-01-01T00:00:00Z",
+  "app": "0.2.0",
+  "source": {
+    "video": {
+      "file": "video.mp4",
+      "width": 1920,
+      "height": 1080,
+      "fps": 60.0,
+      "durationMs": 12500.0
+    },
+    "events": {
+      "file": "events.jsonl"
+    },
+    "platform": "synthetic",
+    "target": "screen"
+  },
+  "crop": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1920.0,
+    "height": 1080.0
+  },
+  "cuts": [
+    {
+      "startMs": 500,
+      "endMs": 900
+    }
+  ],
+  "zooms": [
+    {
+      "id": "auto-1",
+      "startMs": 1150.0,
+      "endMs": 11800.0,
+      "scale": 2.0,
+      "easeInMs": 600.0,
+      "easeOutMs": 700.0,
+      "easing": "smooth",
+      "mode": "follow",
+      "x": 150.0,
+      "y": 400.0,
+      "manual": false
+    }
+  ],
+  "autoZoom": {
+    "enabled": true,
+    "scale": 2.0,
+    "mergeGapMs": 2500.0,
+    "onTyping": true
+  },
+  "cursor": {
+    "show": true,
+    "size": 1.6,
+    "smoothing": 0.6,
+    "ripples": true,
+    "rippleColor": "#ffffff",
+    "hideWhenIdleMs": 0.0,
+    "style": "arrow"
+  },
+  "frame": {
+    "aspect": "16:9",
+    "padding": 0.06,
+    "radius": 14.0,
+    "shadow": 0.55,
+    "background": {
+      "type": "gradient",
+      "from": "#6d5dfc",
+      "to": "#e44d8a",
+      "angle": 135.0
+    }
+  },
+  "webcam": {
+    "show": true,
+    "corner": "bottom-right",
+    "size": 0.18,
+    "shape": "circle"
+  },
+  "export": {
+    "format": "mp4",
+    "preset": "1080p",
+    "fps": 60,
+    "quality": "high"
+  },
+  "clips": [
+    {
+      "id": "main",
+      "transition": {
+        "type": "cut",
+        "durationMs": 500.0
+      },
+      "kind": "recording",
+      "dir": "",
+      "source": {
+        "video": {
+          "file": "video.mp4",
+          "width": 1920,
+          "height": 1080,
+          "fps": 60.0,
+          "durationMs": 12500.0
+        },
+        "events": {
+          "file": "events.jsonl"
+        },
+        "platform": "synthetic",
+        "target": "screen"
+      },
+      "crop": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 1920.0,
+        "height": 1080.0
+      }
+    }
+  ],
+  "annotations": [
+    {
+      "id": "a0",
+      "startMs": 200,
+      "endMs": 2500,
+      "type": "text",
+      "x": 691.1999999999999,
+      "y": 453.59999999999997,
+      "text": "Text",
+      "size": 44,
+      "color": "#ffffff",
+      "background": "#14151af0",
+      "bold": true
+    },
+    {
+      "id": "a1",
+      "startMs": 200,
+      "endMs": 2500,
+      "type": "arrow",
+      "x1": 672,
+      "y1": 648,
+      "x2": 1056,
+      "y2": 486,
+      "color": "#6d5dfc",
+      "width": 8
+    },
+    {
+      "id": "a2",
+      "startMs": 200,
+      "endMs": 2500,
+      "type": "box",
+      "x": 672,
+      "y": 421.2,
+      "width": 576,
+      "height": 237.6,
+      "color": "#6d5dfc",
+      "stroke": 6,
+      "radius": 8
+    },
+    {
+      "id": "a3",
+      "startMs": 200,
+      "endMs": 2500,
+      "type": "highlight",
+      "x": 672,
+      "y": 421.2,
+      "width": 576,
+      "height": 95.04,
+      "color": "#ffe14a",
+      "opacity": 0.7
+    }
+  ],
+  "keystrokes": {
+    "show": true,
+    "position": "bottom",
+    "size": 1.0,
+    "holdMs": 1500.0
+  },
+  "webcamKeys": [],
+  "theme": {
+    "font": "Inter",
+    "accent": "#6d5dfc",
+    "text": "#ffffff",
+    "surface": "#14151af0"
+  },
+  "captions": {
+    "show": true,
+    "style": "karaoke",
+    "y": 0.82,
+    "size": 1.0,
+    "color": "#ffffff",
+    "highlight": "#ffd84a",
+    "background": "#000000a6",
+    "maxChars": 36,
+    "uppercase": false
+  },
+  "audio": {
+    "micVolume": 0,
+    "denoise": 0.0,
+    "normalize": false,
+    "eq": {
+      "enabled": false,
+      "lowCutHz": 80.0,
+      "bassDb": 0.0,
+      "presenceDb": 3.0,
+      "airDb": 1.5
+    },
+    "music": {
+      "source": "builtin:slow-coffee",
+      "volume": 0.3,
+      "duck": true,
+      "duckDb": -14,
+      "fadeInMs": 500,
+      "fadeOutMs": 800
+    }
+  }
+}

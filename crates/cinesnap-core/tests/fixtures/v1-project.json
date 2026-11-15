@@ -1,0 +1,81 @@
+{
+  "format": "cinesnap-project",
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00Z",
+  "app": "0.1.0",
+  "source": {
+    "video": {
+      "file": "video.mp4",
+      "width": 1920,
+      "height": 1080,
+      "fps": 60.0,
+      "durationMs": 12500.0
+    },
+    "events": {
+      "file": "events.jsonl"
+    },
+    "platform": "synthetic",
+    "target": "screen"
+  },
+  "crop": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1920.0,
+    "height": 1080.0
+  },
+  "cuts": [],
+  "zooms": [
+    {
+      "id": "auto-1",
+      "startMs": 1150.0,
+      "endMs": 11800.0,
+      "scale": 2.0,
+      "easeInMs": 600.0,
+      "easeOutMs": 700.0,
+      "easing": "smooth",
+      "mode": "follow",
+      "x": 150.0,
+      "y": 400.0,
+      "manual": false
+    }
+  ],
+  "autoZoom": {
+    "enabled": true,
+    "scale": 2.0,
+    "mergeGapMs": 2500.0,
+    "onTyping": true
+  },
+  "cursor": {
+    "show": true,
+    "size": 1.6,
+    "smoothing": 0.6,
+    "ripples": true,
+    "rippleColor": "#ffffff",
+    "hideWhenIdleMs": 0.0,
+    "style": "arrow"
+  },
+  "frame": {
+    "aspect": "16:9",
+    "padding": 0.06,
+    "radius": 14.0,
+    "shadow": 0.55,
+    "background": {
+      "type": "gradient",
+      "from": "#6d5dfc",
+      "to": "#e44d8a",
+      "angle": 135.0
+    }
+  },
+  "webcam": {
+    "show": true,
+    "corner": "bottom-right",
+    "size": 0.18,
+    "shape": "circle"
+  },
+  "export": {
+    "format": "mp4",
+    "preset": "1080p",
+    "fps": 60,
+    "quality": "high"
+  }
+}

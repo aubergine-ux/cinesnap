@@ -57,6 +57,7 @@ pub fn import_recording(dir: &Path, project: &Project, from: &Path) -> Result<Im
         .into_iter()
         .chain([
             src.mic.as_ref().map(|m| &m.file),
+            src.system.as_ref().map(|m| &m.file),
             src.webcam.as_ref().map(|w| &w.file),
         ])
         .flatten();

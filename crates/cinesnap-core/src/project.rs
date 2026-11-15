@@ -11,10 +11,11 @@ use serde_json::{Map, Value};
 pub const PROJECT_FILE: &str = "project.json";
 /// The manifest as it was before the last save.
 pub const BACKUP_FILE: &str = "project.json.bak";
-pub const PROJECT_VERSION: u32 = 2;
+pub const PROJECT_VERSION: u32 = 3;
 pub const EVENTS_FILE: &str = "events.jsonl";
 pub const VIDEO_FILE: &str = "video.mp4";
 pub const MIC_FILE: &str = "mic.wav";
+pub const SYSTEM_FILE: &str = "system.wav";
 pub const WEBCAM_FILE: &str = "webcam.mp4";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -58,6 +59,9 @@ pub struct Project {
     pub transcript: Option<Transcript>,
     #[serde(default)]
     pub audio: AudioSettings,
+    /// Moments flagged while recording or editing, in timeline time.
+    #[serde(default)]
+    pub markers: Vec<Marker>,
     /// Fields written by newer versions; preserved on save.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -69,6 +73,9 @@ pub struct Source {
     pub video: VideoTrack,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mic: Option<AudioTrack>,
+    /// What the computer played: all of it, or one app (`AudioTrack::app`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<AudioTrack>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webcam: Option<WebcamTrack>,
     pub events: FileRef,
@@ -82,8 +89,18 @@ pub struct VideoTrack {
     pub file: String,
     pub width: u32,
     pub height: u32,
+    /// The highest frame rate; with `vfr`, unchanged frames were dropped.
     pub fps: f64,
     pub duration_ms: f64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub vfr: bool,
+    /// `tonemapped` when the screen was HDR and was converted while recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hdr: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -92,6 +109,9 @@ pub struct AudioTrack {
     pub file: String,
     #[serde(default)]
     pub offset_ms: f64,
+    /// System audio limited to one app: its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -743,10 +763,23 @@ impl Default for Music {
     }
 }
 
+/// A flagged moment, from the marker hotkey or the editor.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Marker {
+    pub id: String,
+    pub at_ms: f64,
+    #[serde(default)]
+    pub label: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioSettings {
     pub mic_volume: f64,
+    pub mic_mute: bool,
+    pub system_volume: f64,
+    pub system_mute: bool,
     /// Noise reduction strength, 0 (off) to 1.
     pub denoise: f64,
     /// Bring speech to a consistent loudness (-16 LUFS).
@@ -760,6 +793,9 @@ impl Default for AudioSettings {
     fn default() -> Self {
         Self {
             mic_volume: 1.0,
+            mic_mute: false,
+            system_volume: 1.0,
+            system_mute: false,
             denoise: 0.0,
             normalize: false,
             eq: VoiceEq::default(),
@@ -819,6 +855,7 @@ impl Project {
             captions: CaptionStyle::default(),
             transcript: None,
             audio: AudioSettings::default(),
+            markers: vec![],
             extra: Map::new(),
         };
         project.ensure_clips();
@@ -933,11 +970,18 @@ impl Project {
         }
     }
 
+    /// Read a manifest of any version, upgrading it on the way in.
+    pub fn parse(text: &str) -> serde_json::Result<Self> {
+        let mut value: Value = serde_json::from_str(text)?;
+        crate::migrate::migrate(&mut value);
+        serde_json::from_value(value)
+    }
+
     pub fn load(dir: &Path) -> Result<Self> {
         let path = dir.join(PROJECT_FILE);
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let mut project: Project = match serde_json::from_str(&text) {
+        let mut project: Project = match Self::parse(&text) {
             Ok(p) => p,
             // A crash while saving cannot damage the manifest (it is replaced
             // atomically), but a failing disk can. The previous save is kept
@@ -946,7 +990,7 @@ impl Project {
                 let backup = dir.join(BACKUP_FILE);
                 match std::fs::read_to_string(&backup)
                     .ok()
-                    .and_then(|t| serde_json::from_str(&t).ok())
+                    .and_then(|t| Self::parse(&t).ok())
                 {
                     Some(p) => p,
                     None => return Err(e).with_context(|| format!("parsing {}", path.display())),
@@ -1012,6 +1056,7 @@ impl Project {
             .into_iter()
             .chain([
                 src.mic.as_ref().map(|m| &m.file),
+                src.system.as_ref().map(|m| &m.file),
                 src.webcam.as_ref().map(|w| &w.file),
             ])
             .flatten();
@@ -1097,6 +1142,11 @@ impl Project {
             k.size = k.size.clamp(0.04, 1.0);
         }
         self.webcam_keys.sort_by(|a, b| a.at_ms.total_cmp(&b.at_ms));
+        self.markers.retain(|m| m.at_ms.is_finite());
+        for m in &mut self.markers {
+            m.at_ms = m.at_ms.clamp(0.0, dur);
+        }
+        self.markers.sort_by(|a, b| a.at_ms.total_cmp(&b.at_ms));
         self.webcam.size = self.webcam.size.clamp(0.04, 1.0);
         self.keystrokes.size = self.keystrokes.size.clamp(0.3, 4.0);
         self.keystrokes.hold_ms = self.keystrokes.hold_ms.clamp(200.0, 10_000.0);
@@ -1113,6 +1163,7 @@ impl Project {
         }
         let a = &mut self.audio;
         a.mic_volume = a.mic_volume.clamp(0.0, 4.0);
+        a.system_volume = a.system_volume.clamp(0.0, 4.0);
         a.denoise = a.denoise.clamp(0.0, 1.0);
         a.eq.low_cut_hz = a.eq.low_cut_hz.clamp(20.0, 400.0);
         a.eq.bass_db = a.eq.bass_db.clamp(-12.0, 12.0);

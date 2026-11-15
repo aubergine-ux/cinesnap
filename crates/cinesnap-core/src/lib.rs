@@ -8,6 +8,7 @@ pub mod events;
 pub mod export;
 pub mod ffmpeg;
 pub mod layout;
+pub mod migrate;
 pub mod motion;
 pub mod music;
 pub mod presets;
@@ -33,8 +34,11 @@ pub(crate) mod testutil {
                     height,
                     fps: 60.0,
                     duration_ms,
+                    vfr: false,
+                    hdr: None,
                 },
                 mic: None,
+                system: None,
                 webcam: None,
                 events: FileRef {
                     file: EVENTS_FILE.into(),
