@@ -21,7 +21,7 @@ use cinesnap_core::motion::{self, Kept, MotionTracks};
 use cinesnap_core::project::{Project, Transcript, Zoom, PROJECT_FILE};
 use cinesnap_core::share::{self, Shared};
 use cinesnap_core::transcript::{self, Suggestion};
-use cinesnap_core::{audio, music, presets, transcribe};
+use cinesnap_core::{activity, audio, music, presets, transcribe};
 use recorder::{RecordOptions, Session, Target};
 use serde::Serialize;
 use serde_json::json;
@@ -574,13 +574,49 @@ fn delete_project(state: State<AppState>, path: String) -> CmdResult<()> {
 #[tauri::command(async)]
 fn auto_zoom(state: State<AppState>, path: String, mut project: Project) -> Vec<Zoom> {
     project.sanitize();
-    motion::auto_zoom(&project, &event_logs(&state, Path::new(&path), &project))
+    let dir = Path::new(&path);
+    motion::auto_zoom(
+        &project,
+        &event_logs(&state, dir, &project),
+        &activity::load(dir, &project),
+    )
 }
 
 #[tauri::command(async)]
 fn compute_motion(state: State<AppState>, path: String, mut project: Project) -> MotionTracks {
     project.sanitize();
-    motion::compute_motion(&project, &event_logs(&state, Path::new(&path), &project))
+    let dir = Path::new(&path);
+    motion::compute_motion(
+        &project,
+        &event_logs(&state, dir, &project),
+        &activity::load(dir, &project),
+    )
+}
+
+/// Find out where things change on screen in recordings not analysed yet.
+/// Returns whether there was anything to do.
+#[tauri::command(async)]
+fn analyze_project(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+    project: Project,
+) -> CmdResult<bool> {
+    let dir = Path::new(&path);
+    if !activity::missing(dir, &project) {
+        return Ok(false);
+    }
+    let ffmpeg = find_ffmpeg(&app)?;
+    let cancel = start_job(&state, "activity");
+    activity::ensure(
+        dir,
+        &project,
+        &ffmpeg,
+        &cancel,
+        &mut job_progress(&app, "activity", "analyse"),
+    )
+    .map_err(job_error)?;
+    Ok(true)
 }
 
 /// Save for the last time and drop the files of clips that were removed.
@@ -1097,6 +1133,7 @@ fn main() {
             delete_project,
             auto_zoom,
             compute_motion,
+            analyze_project,
             close_project,
             import_clip,
             export_presets,
