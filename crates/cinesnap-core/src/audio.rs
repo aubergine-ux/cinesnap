@@ -1,11 +1,11 @@
-//! Sound: cleaning up the voice track, and mixing voice and music into the
-//! soundtrack of the finished video.
+//! Sound: cleaning up the voice track, and mixing voice, system audio and
+//! music into the soundtrack of the finished video.
 //!
 //! Each recording's microphone track is processed once by ffmpeg (alignment,
 //! noise reduction, EQ, loudness) and cached as a mono WAV in the clip's own
-//! time. The mixer then walks the output timeline, splicing the voice at the
-//! cuts with short fades and laying looped music underneath, lowered while
-//! someone is speaking.
+//! time; its system audio is only aligned, and kept in stereo. The mixer then
+//! walks the output timeline, splicing both at the cuts with short fades and
+//! laying looped music underneath, lowered while someone is speaking.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fs::File;
@@ -20,7 +20,7 @@ use anyhow::{bail, Context, Result};
 use crate::export::Cancelled;
 use crate::ffmpeg;
 use crate::motion::Kept;
-use crate::project::{AudioSettings, Music, Project, RecordingClip};
+use crate::project::{AudioSettings, Clip, Music, Project, RecordingClip};
 
 pub const RATE: u32 = 48_000;
 const RATE_F: f64 = RATE as f64;
@@ -190,18 +190,32 @@ impl WavWriter {
     }
 }
 
-// ---- voice -----------------------------------------------------------------
+// ---- voice and system audio -------------------------------------------------
 
-/// ffmpeg filter chain that turns a raw microphone track into the cleaned-up
-/// voice track of a clip: aligned to the video and exactly as long.
-pub fn voice_filter(offset_ms: f64, duration_ms: f64, audio: &AudioSettings) -> String {
-    let mut chain: Vec<String> = Vec::new();
+/// Delay or trim a track that started `offset_ms` after the video so it
+/// lines up with it.
+fn align(chain: &mut Vec<String>, offset_ms: f64) {
     if offset_ms > 0.5 {
         chain.push(format!("adelay={}:all=1", offset_ms.round() as u64));
     } else if offset_ms < -0.5 {
         chain.push(format!("atrim=start={:.4}", -offset_ms / 1000.0));
         chain.push("asetpts=PTS-STARTPTS".into());
     }
+}
+
+/// Resample, then pad or trim to exactly the video's length.
+fn fit(chain: &mut Vec<String>, duration_ms: f64) {
+    chain.push(format!("aresample={RATE}"));
+    let seconds = duration_ms / 1000.0;
+    chain.push(format!("apad=whole_dur={seconds:.4}"));
+    chain.push(format!("atrim=end={seconds:.4}"));
+}
+
+/// ffmpeg filter chain that turns a raw microphone track into the cleaned-up
+/// voice track of a clip: aligned to the video and exactly as long.
+pub fn voice_filter(offset_ms: f64, duration_ms: f64, audio: &AudioSettings) -> String {
+    let mut chain: Vec<String> = Vec::new();
+    align(&mut chain, offset_ms);
     if audio.denoise > 0.005 {
         // 6 dB is barely audible, 30 dB is heavy-handed.
         chain.push(format!(
@@ -225,10 +239,16 @@ pub fn voice_filter(offset_ms: f64, duration_ms: f64, audio: &AudioSettings) -> 
     if audio.normalize {
         chain.push("loudnorm=I=-16:TP=-1.5:LRA=11".into());
     }
-    chain.push(format!("aresample={RATE}"));
-    let seconds = duration_ms / 1000.0;
-    chain.push(format!("apad=whole_dur={seconds:.4}"));
-    chain.push(format!("atrim=end={seconds:.4}"));
+    fit(&mut chain, duration_ms);
+    chain.join(",")
+}
+
+/// ffmpeg filter chain for a system audio track: aligned and exactly as long
+/// as the video, otherwise untouched.
+pub fn system_filter(offset_ms: f64, duration_ms: f64) -> String {
+    let mut chain = Vec::new();
+    align(&mut chain, offset_ms);
+    fit(&mut chain, duration_ms);
     chain.join(",")
 }
 
@@ -317,6 +337,31 @@ pub fn voice_track(
     Ok(Some(out))
 }
 
+/// A recording's system audio as an aligned stereo WAV, or `None` if it has
+/// none.
+pub fn system_track(
+    ffmpeg: &Path,
+    dir: &Path,
+    id: &str,
+    clip: &RecordingClip,
+    cancel: &AtomicBool,
+) -> Result<Option<PathBuf>> {
+    let Some(track) = &clip.source.system else {
+        return Ok(None);
+    };
+    let input = Project::clip_dir(dir, clip).join(&track.file);
+    if !input.is_file() {
+        return Ok(None);
+    }
+    let filter = system_filter(track.offset_ms, clip.source.video.duration_ms);
+    let cache = cache_dir(dir);
+    let prefix = format!("system-{id}-");
+    let out = cache.join(format!("{prefix}{:016x}.wav", fingerprint(&input, &filter)));
+    render_wav(ffmpeg, &input, Some(&filter), 2, &out, cancel)?;
+    prune(&cache, &prefix, &out);
+    Ok(Some(out))
+}
+
 /// The music as a stereo WAV: a built-in track or the user's file.
 pub fn music_track(
     ffmpeg: &Path,
@@ -358,10 +403,10 @@ pub fn music_track(
 
 // ---- mixing ----------------------------------------------------------------
 
-/// A stretch of output audio taken from one voice track (or silence).
+/// A stretch of output audio taken from one clip's track (or silence).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Segment {
-    /// Index into the voice tracks, or `None` for silence.
+    /// Index into the tracks, or `None` for silence.
     voice: Option<usize>,
     /// First frame inside the voice track.
     start: u64,
@@ -372,8 +417,8 @@ fn frames(ms: f64) -> u64 {
     (ms * RATE_F / 1000.0).round().max(0.0) as u64
 }
 
-/// Cut the timeline into the pieces of voice track that make up the output.
-/// `voices[i]` says whether clip `i` has a voice track.
+/// Cut the timeline into the pieces of track that make up the output.
+/// `voices[i]` says whether clip `i` has a track.
 fn segments(project: &Project, kept: &Kept, voices: &[bool]) -> Vec<Segment> {
     let spans = project.spans();
     let mut out: Vec<Segment> = Vec::new();
@@ -407,36 +452,58 @@ fn segments(project: &Project, kept: &Kept, voices: &[bool]) -> Vec<Segment> {
     out
 }
 
-/// Reads the spliced voice as one continuous mono stream.
-struct VoiceStream<'a> {
+/// Reads the clips' tracks, spliced at the cuts, as one continuous stream
+/// of interleaved frames.
+struct Spliced<'a> {
     segments: &'a [Segment],
     tracks: &'a mut [Option<Wav>],
+    channels: usize,
     gain: f32,
     /// Position: segment index and frame inside it.
     at: (usize, usize),
     scratch: Vec<i16>,
 }
 
-impl VoiceStream<'_> {
-    /// Fill `out` with the next samples; returns how many were produced.
+impl<'a> Spliced<'a> {
+    fn new(
+        segments: &'a [Segment],
+        tracks: &'a mut [Option<Wav>],
+        channels: usize,
+        gain: f32,
+    ) -> Self {
+        Self {
+            segments,
+            tracks,
+            channels,
+            gain,
+            at: (0, 0),
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Fill `out` with the next frames; returns how many were produced.
     fn read(&mut self, out: &mut [f32]) -> Result<usize> {
+        let ch = self.channels;
+        let want = out.len() / ch;
         let mut done = 0;
-        while done < out.len() {
+        while done < want {
             let Some(seg) = self.segments.get(self.at.0) else {
                 break;
             };
-            let n = (seg.frames - self.at.1).min(out.len() - done);
-            let dst = &mut out[done..done + n];
+            let n = (seg.frames - self.at.1).min(want - done);
+            let dst = &mut out[done * ch..(done + n) * ch];
             match seg.voice.and_then(|i| self.tracks[i].as_mut()) {
                 Some(wav) => {
-                    self.scratch.resize(n, 0);
+                    self.scratch.resize(n * ch, 0);
                     wav.read(seg.start + self.at.1 as u64, &mut self.scratch)?;
-                    for (i, (o, s)) in dst.iter_mut().zip(&self.scratch).enumerate() {
+                    for (i, (o, s)) in dst.chunks_mut(ch).zip(self.scratch.chunks(ch)).enumerate() {
                         // Fade in and out of every piece so splices never click.
                         let pos = self.at.1 + i;
                         let edge = pos.min(seg.frames - 1 - pos);
                         let fade = ((edge + 1) as f32 / SPLICE_FADE as f32).min(1.0);
-                        *o = *s as f32 / 32768.0 * self.gain * fade;
+                        for (o, s) in o.iter_mut().zip(s) {
+                            *o = *s as f32 / 32768.0 * self.gain * fade;
+                        }
                     }
                 }
                 None => dst.fill(0.0),
@@ -505,7 +572,9 @@ pub fn mix_key(project: &Project) -> String {
                 &c.id,
                 c.duration_ms(),
                 c.recording()
-                    .and_then(|r| r.source.mic.as_ref().map(|m| m.offset_ms))
+                    .and_then(|r| r.source.mic.as_ref().map(|m| m.offset_ms)),
+                c.recording()
+                    .and_then(|r| r.source.system.as_ref().map(|m| m.offset_ms))
             ))
             .collect::<Vec<_>>(),
     ]);
@@ -515,7 +584,7 @@ pub fn mix_key(project: &Project) -> String {
 
 /// Write the soundtrack of the finished video (stereo WAV, as long as the
 /// video) to `out`. Returns `false`, writing nothing, when the project has
-/// neither voice nor music. `progress` receives 0..1.
+/// no voice, system audio or music to play. `progress` receives 0..1.
 pub fn build_mix(
     dir: &Path,
     project: &Project,
@@ -531,53 +600,66 @@ pub fn build_mix(
         Ok(())
     };
     let audio = &project.audio;
-    let with_mic = project
+    let use_mic = !audio.mic_mute && audio.mic_volume > 0.0;
+    let use_system = !audio.system_mute && audio.system_volume > 0.0;
+    let jobs = project
         .clips
         .iter()
-        .filter(|c| c.recording().is_some_and(|r| r.source.mic.is_some()))
-        .count();
-    let mut paths: Vec<Option<PathBuf>> = Vec::new();
+        .filter_map(Clip::recording)
+        .map(|r| {
+            usize::from(use_mic && r.source.mic.is_some())
+                + usize::from(use_system && r.source.system.is_some())
+        })
+        .sum::<usize>()
+        .max(1);
+    let (mut voice_paths, mut system_paths) = (Vec::new(), Vec::new());
     let mut done = 0;
     for clip in &project.clips {
         cancelled()?;
-        let path = match clip.recording() {
-            Some(r) => voice_track(ffmpeg, dir, &clip.id, r, audio, cancel)?,
-            None => None,
-        };
-        if clip.recording().is_some_and(|r| r.source.mic.is_some()) {
-            done += 1;
-            progress(0.7 * done as f64 / with_mic as f64);
+        let (mut voice, mut system) = (None, None);
+        if let Some(r) = clip.recording() {
+            if use_mic && r.source.mic.is_some() {
+                voice = voice_track(ffmpeg, dir, &clip.id, r, audio, cancel)?;
+                done += 1;
+                progress(0.7 * done as f64 / jobs as f64);
+            }
+            if use_system && r.source.system.is_some() {
+                system = system_track(ffmpeg, dir, &clip.id, r, cancel)?;
+                done += 1;
+                progress(0.7 * done as f64 / jobs as f64);
+            }
         }
-        paths.push(path);
+        voice_paths.push(voice);
+        system_paths.push(system);
     }
     let music = match &audio.music {
         Some(m) if m.volume > 0.0 => music_track(ffmpeg, dir, m, cancel)?.zip(Some(m)),
         _ => None,
     };
-    if paths.iter().all(Option::is_none) && music.is_none() {
+    let silent = |p: &[Option<PathBuf>]| p.iter().all(Option::is_none);
+    if silent(&voice_paths) && silent(&system_paths) && music.is_none() {
         return Ok(false);
     }
 
-    let mut tracks: Vec<Option<Wav>> = paths
-        .iter()
-        .map(|p| p.as_deref().map(Wav::open).transpose())
-        .collect::<Result<_>>()?;
+    let open = |paths: &[Option<PathBuf>]| -> Result<Vec<Option<Wav>>> {
+        paths
+            .iter()
+            .map(|p| p.as_deref().map(Wav::open).transpose())
+            .collect()
+    };
+    let mut tracks = open(&voice_paths)?;
+    let mut system_tracks = open(&system_paths)?;
     let kept = Kept::new(project.duration_ms(), &project.cuts);
-    let voices: Vec<bool> = tracks.iter().map(Option::is_some).collect();
-    let segs = segments(project, &kept, &voices);
+    let present = |t: &[Option<Wav>]| t.iter().map(Option::is_some).collect::<Vec<_>>();
+    let segs = segments(project, &kept, &present(&tracks));
+    let system_segs = segments(project, &kept, &present(&system_tracks));
     let total: usize = segs.iter().map(|s| s.frames).sum();
     let gain = audio.mic_volume as f32;
 
     // First pass: how loud is the voice, hop by hop.
     let mut rms = Vec::with_capacity(total / HOP + 1);
     let mut block = vec![0f32; HOP];
-    let mut stream = VoiceStream {
-        segments: &segs,
-        tracks: &mut tracks,
-        gain,
-        at: (0, 0),
-        scratch: Vec::new(),
-    };
+    let mut stream = Spliced::new(&segs, &mut tracks, 1, gain);
     loop {
         let n = stream.read(&mut block)?;
         if n == 0 {
@@ -610,13 +692,14 @@ pub fn build_mix(
         std::fs::create_dir_all(parent)?;
     }
     let mut writer = WavWriter::create(out, 2, RATE)?;
-    let mut stream = VoiceStream {
-        segments: &segs,
-        tracks: &mut tracks,
-        gain,
-        at: (0, 0),
-        scratch: Vec::new(),
-    };
+    let mut stream = Spliced::new(&segs, &mut tracks, 1, gain);
+    let mut system = Spliced::new(
+        &system_segs,
+        &mut system_tracks,
+        2,
+        audio.system_volume as f32,
+    );
+    let mut played = vec![0f32; HOP * 2];
     let mut pcm = vec![0i16; HOP * 2];
     let mut tune = vec![0i16; HOP * 2];
     let mut pos = 0usize;
@@ -626,6 +709,8 @@ pub fn build_mix(
         if n == 0 {
             break;
         }
+        played.fill(0.0);
+        system.read(&mut played[..n * 2])?;
         if let Some((wav, _, _)) = &mut music {
             // Loop the track: read up to the end, then wrap.
             let at = pos as u64 % wav.frames;
@@ -636,7 +721,7 @@ pub fn build_mix(
             }
         }
         for i in 0..n {
-            let (mut l, mut r) = (block[i], block[i]);
+            let (mut l, mut r) = (block[i] + played[i * 2], block[i] + played[i * 2 + 1]);
             if let Some((_, m, env)) = &music {
                 let t = pos + i;
                 let fade_in = if m.fade_in_ms > 0.0 {
