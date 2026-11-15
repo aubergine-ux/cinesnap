@@ -9,7 +9,7 @@ use cinesnap_core::project::{ClipBody, Project, Shape, TransitionKind};
 const FIXTURE: &str = include_str!("fixtures/editor-project.json");
 
 fn load() -> Project {
-    let mut p: Project = serde_json::from_str(FIXTURE).expect("the editor's project file parses");
+    let mut p = Project::parse(FIXTURE).expect("the editor's project file parses");
     p.validate().expect("and is valid");
     p.sanitize();
     p
@@ -59,7 +59,28 @@ fn reads_everything_the_editor_writes() {
     let audio = &p.audio;
     assert!(audio.normalize && audio.eq.enabled);
     assert_eq!(audio.music.as_ref().unwrap().source, "builtin:open-sky");
+    assert!(!audio.mic_mute && audio.system_mute);
+    assert_eq!(audio.system_volume, 0.7);
     assert_eq!(p.export.preset, "shorts");
+
+    let main = p.clips[1].recording().unwrap();
+    let system = main.source.system.as_ref().unwrap();
+    assert_eq!(
+        (
+            system.file.as_str(),
+            system.offset_ms,
+            system.app.as_deref()
+        ),
+        ("system.wav", -40.0, Some("Firefox"))
+    );
+    assert!(main.source.video.vfr);
+    assert_eq!(main.source.video.hdr.as_deref(), Some("tonemapped"));
+    let markers: Vec<(f64, &str)> = p
+        .markers
+        .iter()
+        .map(|m| (m.at_ms, m.label.as_str()))
+        .collect();
+    assert_eq!(markers, [(4200.0, "Install"), (11000.0, "")]);
 }
 
 /// Everything in `theirs` is in `ours`, with the same value.

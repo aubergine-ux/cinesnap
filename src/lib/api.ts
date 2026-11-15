@@ -17,6 +17,7 @@ import type {
   Project,
   RecentProject,
   RecordingOptions,
+  RecordingStatus,
   Shared,
   Sources,
   Speech,
@@ -58,8 +59,18 @@ export const api = {
   downloadFfmpeg: () => call<void>("download_ffmpeg"),
   listSources: () => call<Sources>("list_sources"),
   startRecording: (options: RecordingOptions) => call<void>("start_recording", { options }),
-  stopRecording: () => call<string>("stop_recording"),
+  /** Stop and build the project; every window hears `recording://stopped`. */
+  stopRecording: (fromBar = false) => call<string>("stop_recording", { fromBar }),
   cancelRecording: () => call<void>("cancel_recording"),
+  pauseRecording: () => call<RecordingStatus>("pause_recording"),
+  resumeRecording: () => call<RecordingStatus>("resume_recording"),
+  addMarker: () => call<void>("add_marker"),
+  switchTarget: (target: RecordingOptions["target"]) => call<void>("switch_target", { target }),
+  recordingStatus: () => call<RecordingStatus | null>("recording_status"),
+  /** The pointer went onto (or left) the recording bar. */
+  barHover: (inside: boolean) => void call<void>("bar_hover", { inside }).catch(() => {}),
+  /** Re-register the hotkeys from the settings; returns problems to show. */
+  applyHotkeys: () => call<string[]>("apply_hotkeys"),
   initialProject: () => call<string | null>("initial_project"),
   listRecent: () => call<RecentProject[]>("list_recent"),
   openProject: (path: string) => call<Project>("open_project", { path }),
@@ -90,7 +101,13 @@ export const api = {
   /** Write a diagnostic line to the backend log. */
   clientLog: (message: string) => void (isTauri ? invoke("client_log", { message }).catch(() => {}) : undefined),
   onFfmpegProgress: (cb: (p: { fraction: number }) => void) => on("ffmpeg://progress", cb),
-  onRecordingTick: (cb: (p: { elapsedMs: number }) => void) => on("recording://tick", cb),
+  onRecordingTick: (cb: (p: RecordingStatus) => void) => on("recording://tick", cb),
+  onRecordingStopped: (cb: (path: string) => void) => on("recording://stopped", cb),
+  onRecordingCancelled: (cb: () => void) => on("recording://cancelled", cb),
+  onRecordingError: (cb: (message: string) => void) => on("recording://error", cb),
+  onRecordingMarker: (cb: () => void) => on("recording://marker", cb),
+  /** The start/stop hotkey was pressed while nothing was being recorded. */
+  onHotkeyStart: (cb: () => void) => on("hotkey://start", cb),
   onExportProgress: (cb: (p: ExportProgress) => void) => on("export://progress", cb),
 };
 

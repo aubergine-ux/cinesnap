@@ -3,7 +3,7 @@ import { api, errorMessage, isTauri } from "./api";
 import { BUILTIN_STYLES, appendImported, applyStyle, extractStyle, insertClip, moveClip, newAnnotation, newCard, newId, removeClip, restoreWords, shiftFrom, spanAt, spans, totalDuration, webcamStateAt, wordsCut } from "./edit";
 import { viewRect, type Box } from "./layout";
 import { addCut, newZoomRange, normalizeCuts } from "./time";
-import type { Annotation, AnnotationType, AppSettings, Capabilities, Clip, Cut, JobProgress, MotionTracks, MusicTrack, Project, RecentProject, Sources, Speech, StylePreset, WebcamKey, ZoomSegment } from "./types";
+import type { Annotation, AnnotationType, AppSettings, Capabilities, Clip, Cut, JobProgress, Marker, MotionTracks, MusicTrack, Project, RecentProject, RecordingOptions, Sources, Speech, StylePreset, WebcamKey, ZoomSegment } from "./types";
 
 export type Selection =
   | { kind: "zoom"; id: string }
@@ -11,6 +11,7 @@ export type Selection =
   | { kind: "annotation"; id: string }
   | { kind: "clip"; id: string }
   | { kind: "webcamKey"; id: string }
+  | { kind: "marker"; id: string }
   | null;
 
 export type PanelTab = "style" | "video" | "audio" | "captions" | "export";
@@ -97,6 +98,11 @@ interface State {
   moveClip: (id: string, by: number) => void;
   addWebcamKey: () => void;
   editWebcamKey: (id: string, patch: Partial<WebcamKey>, key?: string) => void;
+  /** A marker at the playhead. */
+  addMarker: () => void;
+  editMarker: (id: string, patch: Partial<Marker>, key?: string) => void;
+  /** Start recording with these choices and remember them for next time. */
+  startRecording: (options: RecordingOptions) => Promise<void>;
 
   selectWords: (sel: [number, number] | null) => void;
   cutWords: (i: number, j: number) => void;
@@ -296,6 +302,22 @@ export const useStore = create<State>((set, get) => {
 
     init: async () => {
       api.onJobProgress((p) => set((s) => ({ jobs: { ...s.jobs, [p.job]: p } })));
+      // A recording can be stopped from the bar, a hotkey or this window.
+      api.onRecordingStopped((path) => void get().openProject(path));
+      api.onRecordingCancelled(() => {
+        set({ screen: "home" });
+        void get().refreshHome();
+      });
+      api.onRecordingError((message) => {
+        set({ error: message });
+        void api.recordingStatus().then((st) => {
+          if (!st && get().screen === "recording") set({ screen: "home" });
+        });
+      });
+      api.onHotkeyStart(() => {
+        const { screen, settings } = get();
+        if (screen === "home" && settings.record?.target) void get().startRecording(settings.record as RecordingOptions);
+      });
       if (typeof window !== "undefined") {
         // Closing the window or switching away must never lose an edit.
         window.addEventListener("beforeunload", () => void get().flushSave());
@@ -415,6 +437,7 @@ export const useStore = create<State>((set, get) => {
       else if (sel.kind === "cut") get().update((p) => void (p.cuts = p.cuts.filter((c) => Math.abs(c.startMs - sel.startMs) > 0.5)));
       else if (sel.kind === "annotation") get().update((p) => void (p.annotations = p.annotations.filter((a) => a.id !== sel.id)));
       else if (sel.kind === "webcamKey") get().update((p) => void (p.webcamKeys = p.webcamKeys.filter((k) => k.id !== sel.id)));
+      else if (sel.kind === "marker") get().update((p) => void (p.markers = p.markers.filter((m) => m.id !== sel.id)));
       else return get().removeClip(sel.id);
       set({ selection: null });
     },
@@ -656,6 +679,41 @@ export const useStore = create<State>((set, get) => {
         },
         { key: key ? `cam:${id}:${key}` : undefined },
       );
+    },
+
+    addMarker: () => {
+      const { project } = get();
+      if (!project) return;
+      const atMs = Math.round(get().sourceTime());
+      // Pressing M twice on the same frame should not stack markers.
+      if (project.markers.some((m) => Math.abs(m.atMs - atMs) < 1)) return;
+      const id = newId("m");
+      get().update((p) => {
+        p.markers.push({ id, atMs, label: "" });
+        p.markers.sort((a, b) => a.atMs - b.atMs);
+      });
+      set({ selection: { kind: "marker", id } });
+    },
+
+    editMarker: (id, patch, key) => {
+      get().update(
+        (p) => {
+          const m = p.markers.find((x) => x.id === id);
+          if (m) Object.assign(m, patch);
+          p.markers.sort((a, b) => a.atMs - b.atMs);
+        },
+        { key: key ? `marker:${id}:${key}` : undefined },
+      );
+    },
+
+    startRecording: async (options) => {
+      void get().saveSettings({ record: options });
+      try {
+        await api.startRecording(options);
+        set({ screen: "recording" });
+      } catch (e) {
+        set({ error: errorMessage(e) });
+      }
     },
 
     selectWords: (wordSel) => set({ wordSel }),

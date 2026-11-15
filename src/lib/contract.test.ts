@@ -20,6 +20,8 @@ function everything(): Project {
   p.app = "0.0.0";
   const main = p.clips[0] as RecordingClip;
   main.source.webcam = { file: "webcam.mp4", offsetMs: 120, width: 1280, height: 720 };
+  main.source.system = { file: "system.wav", offsetMs: -40, app: "Firefox" };
+  main.source.video.hdr = "tonemapped";
   const second: RecordingClip = { ...structuredClone(main), id: "clip1", dir: "clips/clip1", transition: { type: "zoom", durationMs: 600 } };
   second.source.video = { file: "video.mp4", width: 1280, height: 720, fps: 30, durationMs: 8000 };
   second.crop = { x: 0, y: 0, width: 1280, height: 720 };
@@ -43,7 +45,11 @@ function everything(): Project {
       { t0: 4400, t1: 5000, text: "world." },
     ],
   };
-  p.audio = { micVolume: 1.2, denoise: 0.5, normalize: true, eq: { enabled: true, lowCutHz: 90, bassDb: -1, presenceDb: 4, airDb: 2 }, music: { source: "builtin:open-sky", volume: 0.3, duck: true, duckDb: -12, fadeInMs: 500, fadeOutMs: 2000 } };
+  p.markers = [
+    { id: "m1", atMs: 4200, label: "Install" },
+    { id: "m2", atMs: 11000, label: "" },
+  ];
+  p.audio = { micVolume: 1.2, micMute: false, systemVolume: 0.7, systemMute: true, denoise: 0.5, normalize: true, eq: { enabled: true, lowCutHz: 90, bassDb: -1, presenceDb: 4, airDb: 2 }, music: { source: "builtin:open-sky", volume: 0.3, duck: true, duckDb: -12, fadeInMs: 500, fadeOutMs: 2000 } };
   applyStyle(p, BUILTIN_STYLES[3]);
   p.export = { format: "mp4", preset: "shorts", fps: 60, quality: "medium" };
   return p;

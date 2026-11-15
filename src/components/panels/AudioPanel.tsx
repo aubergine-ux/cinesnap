@@ -19,6 +19,8 @@ export function AudioPanel() {
 
   const audio = project.audio;
   const hasMic = project.clips.some((c) => c.kind === "recording" && c.source.mic);
+  const system = project.clips.flatMap((c) => (c.kind === "recording" && c.source.system ? [c.source.system] : []));
+  const apps = [...new Set(system.map((t) => t.app).filter(Boolean))];
   const music = audio.music;
   const setMusic = (patch: Partial<Music>, key = "music") => set(key, (p) => void (p.audio.music = { ...(p.audio.music ?? DEFAULT_MUSIC), ...patch }));
   const enhanced = audio.normalize && audio.denoise > 0 && audio.eq.enabled;
@@ -46,6 +48,7 @@ export function AudioPanel() {
               {enhanced ? "✓ Voice enhanced" : "Enhance voice"}
             </button>
             <p className="hint">One click: reduces background noise, evens out the loudness and adds a little clarity. Fine-tune below.</p>
+            <Toggle label="Mute" value={audio.micMute} onChange={(v) => set("audio:mic-mute", (p) => void (p.audio.micMute = v))} />
             <Slider label="Volume" value={audio.micVolume} min={0} max={2} step={0.01} format={pct} onChange={(v) => set("audio:vol", (p) => void (p.audio.micVolume = v))} />
             <Slider label="Noise reduction" value={audio.denoise} min={0} max={1} step={0.05} format={(v) => (v === 0 ? "Off" : pct(v))} onChange={(v) => set("audio:denoise", (p) => void (p.audio.denoise = v))} />
             <Toggle label="Even out loudness" value={audio.normalize} onChange={(v) => set("audio:norm", (p) => void (p.audio.normalize = v))} />
@@ -61,6 +64,14 @@ export function AudioPanel() {
           </>
         )}
       </Section>
+
+      {system.length > 0 && (
+        <Section title={apps.length ? `Sound from ${apps.join(", ")}` : "Computer sound"}>
+          <Toggle label="Mute" value={audio.systemMute} onChange={(v) => set("audio:sys-mute", (p) => void (p.audio.systemMute = v))} />
+          <Slider label="Volume" value={audio.systemVolume} min={0} max={2} step={0.01} format={pct} onChange={(v) => set("audio:sys-vol", (p) => void (p.audio.systemVolume = v))} />
+          <p className="hint">Recorded on its own track, so it can be turned down under the voice or muted without touching it.</p>
+        </Section>
+      )}
 
       <Section title="Music">
         <div className="track-list">

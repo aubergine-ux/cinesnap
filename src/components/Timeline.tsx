@@ -71,7 +71,7 @@ export function Timeline() {
   const cutMark = useStore((s) => s.cutMark);
   const past = useStore((s) => s.past.length);
   const future = useStore((s) => s.future.length);
-  const { update, select, editZoom, addZoomAt, seekSource, setPlaying, setCutMode, undo, redo, sourceTime, addAnnotation, editAnnotation, editWebcamKey, addWebcamKey } = useStore.getState();
+  const { update, select, editZoom, addZoomAt, seekSource, setPlaying, setCutMode, undo, redo, sourceTime, addAnnotation, editAnnotation, editWebcamKey, addWebcamKey, addMarker, editMarker } = useStore.getState();
 
   const scroller = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState(800);
@@ -206,6 +206,9 @@ export function Timeline() {
         <button className="btn small" title="Add a zoom at the playhead" onClick={() => addZoomAt(sourceTime())}>
           ＋ Zoom
         </button>
+        <button className="btn small" title="Add a marker at the playhead (M)" onClick={addMarker}>
+          ⚑ Marker
+        </button>
         <span className="sep" />
         {TOOLS.map((t) => (
           <button key={t.type} className="btn small tool" title={`${t.hint} at the playhead`} onClick={() => addAnnotation(t.type)}>
@@ -238,6 +241,27 @@ export function Timeline() {
               <span key={t} className="tick" style={{ left: PAD + t * pxPerMs }}>
                 {formatTime(t, false)}
               </span>
+            ))}
+            {project.markers.map((m) => (
+              <button
+                key={m.id}
+                className={`tl-marker ${selection?.kind === "marker" && selection.id === m.id ? "selected" : ""}`}
+                style={{ left: PAD + m.atMs * pxPerMs }}
+                title={`${m.label || "Marker"} · ${formatTime(m.atMs)}`}
+                aria-label={`Marker ${m.label || formatTime(m.atMs)}`}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  select({ kind: "marker", id: m.id });
+                  drag(
+                    e,
+                    (_dx, ev) => editMarker(m.id, { atMs: Math.round(msAt(ev.clientX)) }, "move"),
+                    (moved) => !moved && seekSource(m.atMs),
+                  );
+                }}
+              >
+                <span aria-hidden>⚑</span>
+                {m.label && <span className="tl-marker-label">{m.label}</span>}
+              </button>
             ))}
           </div>
 

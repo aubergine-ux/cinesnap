@@ -11,17 +11,36 @@ export interface VideoSource {
   file: string;
   width: number;
   height: number;
+  /** The highest frame rate; with `vfr`, unchanged frames were dropped. */
   fps: number;
   durationMs: number;
+  vfr?: boolean;
+  /** "tonemapped" when an HDR screen was converted while recording. */
+  hdr?: string;
+}
+
+export interface AudioTrack {
+  file: string;
+  offsetMs: number;
+  /** System audio limited to one app: its name. */
+  app?: string;
 }
 
 export interface Source {
   video: VideoSource;
-  mic?: { file: string; offsetMs: number };
+  mic?: AudioTrack;
+  /** What the computer played: everything, or one app. */
+  system?: AudioTrack;
   webcam?: { file: string; offsetMs: number; width: number; height: number };
   events: { file: string };
   platform: string;
-  target: "screen" | "window" | "region";
+  target: "screen" | "window" | "region" | "screens";
+}
+
+export interface Marker {
+  id: string;
+  atMs: number;
+  label: string;
 }
 
 export interface Cut {
@@ -219,6 +238,9 @@ export interface Music {
 
 export interface AudioSettings {
   micVolume: number;
+  micMute: boolean;
+  systemVolume: number;
+  systemMute: boolean;
   denoise: number;
   normalize: boolean;
   eq: VoiceEq;
@@ -260,6 +282,8 @@ export interface Project {
   captions: CaptionSettings;
   transcript?: Transcript;
   audio: AudioSettings;
+  /** Moments flagged while recording or editing, in timeline time. */
+  markers: Marker[];
   // Unknown fields are preserved on save.
   [extra: string]: unknown;
 }
@@ -284,24 +308,59 @@ export interface Capabilities {
 export interface ScreenInfo extends Rect {
   id: string;
   name: string;
+  /** In HDR mode; converted to SDR while recording. */
+  hdr: boolean;
+}
+
+export interface Device {
+  id: string;
+  name: string;
 }
 
 export interface Sources {
   portal: boolean;
   screens: ScreenInfo[];
   windows: { id: string; title: string }[];
-  mics: { id: string; name: string }[];
-  webcams: { id: string; name: string }[];
+  mics: Device[];
+  webcams: Device[];
+  /** Outputs whose sound can be recorded; empty when none can. */
+  outputs: Device[];
+  /** Apps playing sound that can be recorded on their own. */
+  apps: Device[];
 }
 
+export type TargetKind = "screen" | "window" | "portal" | "all";
+
 export interface RecordingOptions {
-  target: { kind: "screen" | "window" | "portal"; id?: string };
+  target: { kind: TargetKind; id?: string };
   region?: Rect | null;
   mic: string | null;
   webcam: string | null;
+  /** An output id: record everything it plays. */
+  systemAudio: string | null;
+  /** An app id: record only its sound. */
+  appAudio: string | null;
+  appName: string | null;
   fps: number;
+  /** Drop frames where nothing changed. */
+  vfr: boolean;
+  /** Seconds of countdown, cut from the start. */
+  countdown: number;
   /** Label shortcuts (Ctrl+K, Enter) for the keystroke overlay. Typed text is never recorded. */
   shortcuts: boolean;
+}
+
+export interface RecordingStatus {
+  elapsedMs: number;
+  paused: boolean;
+  countdownMs: number;
+  segments: number;
+}
+
+export interface Hotkeys {
+  toggle: string;
+  pause: string;
+  marker: string;
 }
 
 export interface RecentProject {
@@ -443,6 +502,11 @@ export interface AppSettings {
   shareServer?: string;
   shareToken?: string;
   speechModel?: string;
+  hotkeys?: Partial<Hotkeys>;
+  /** Keep the recording bar on screen where it cannot be kept out of the video. */
+  keepBarVisible?: boolean;
+  /** The last choices on the home screen. */
+  record?: Partial<RecordingOptions>;
 }
 
 export interface ExportProgress {

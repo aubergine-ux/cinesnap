@@ -2,7 +2,8 @@ import { spans } from "../../lib/edit";
 import { useStore } from "../../lib/store";
 import type { Annotation, Background, CardClip, Clip, Easing, TransitionKind, ZoomMode } from "../../lib/types";
 import { FAMILIES } from "../../render/text";
-import { AlphaColorInput, ColorInput, Section, Segmented, SelectRow, Slider, TextArea, Toggle } from "../controls";
+import { formatTime } from "../../lib/timeline";
+import { AlphaColorInput, ColorInput, Section, Segmented, SelectRow, Slider, TextArea, TextInput, Toggle } from "../controls";
 
 const ms = (v: number) => `${(v / 1000).toFixed(2)}s`;
 const px = (v: number) => `${Math.round(v)}px`;
@@ -175,7 +176,7 @@ function CardProps({ card, index, count }: { card: CardClip; index: number; coun
 export function Inspector() {
   const project = useStore((s) => s.project)!;
   const selection = useStore((s) => s.selection);
-  const { editZoom, editWebcamKey } = useStore.getState();
+  const { editZoom, editWebcamKey, editMarker } = useStore.getState();
   if (!selection) return null;
 
   if (selection.kind === "zoom") {
@@ -242,6 +243,17 @@ export function Inspector() {
         </p>
         <TransitionProps clip={clip} first={index === 0} />
         <ClipActions clip={clip} index={index} count={project.clips.length} />
+      </Section>
+    );
+  }
+
+  if (selection.kind === "marker") {
+    const m = project.markers.find((x) => x.id === selection.id);
+    if (!m) return null;
+    return (
+      <Section title="Marker" right={<Remove title="Delete marker" />}>
+        <TextInput label="Label" value={m.label} placeholder="Chapter title" onChange={(label) => editMarker(m.id, { label }, "label")} />
+        <p className="hint">At {formatTime(m.atMs)}. Drag the flag on the timeline to move it.</p>
       </Section>
     );
   }

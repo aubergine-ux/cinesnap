@@ -14,6 +14,7 @@ import type {
   RecentProject,
   RecordingClip,
   RecordingOptions,
+  RecordingStatus,
   Sources,
   Speech,
   Suggestion,
@@ -61,7 +62,7 @@ const SCRIPT = "So this is the dashboard. Um, every card opens a detail view. Cl
 /** The demo recording as the backend would hand it over. */
 export function demoProject(): Project {
   const source: Project["source"] = {
-    video: { file: "video.mp4", width: W, height: H, fps: 60, durationMs: DURATION },
+    video: { file: "video.mp4", width: W, height: H, fps: 60, durationMs: DURATION, vfr: true },
     mic: { file: "mic.wav", offsetMs: 0 },
     events: { file: "events.jsonl" },
     platform: "mock",
@@ -70,7 +71,7 @@ export function demoProject(): Project {
   const crop = { x: 0, y: 0, width: W, height: H };
   return {
     format: "cinesnap-project",
-    version: 1,
+    version: 3,
     createdAt: new Date().toISOString(),
     app: "0.2.0",
     source,
@@ -94,7 +95,8 @@ export function demoProject(): Project {
     webcamKeys: [],
     theme: { font: "Inter", accent: "#6d5dfc", text: "#ffffff", surface: "#14151af0" },
     captions: { show: true, style: "karaoke", y: 0.82, size: 1, color: "#ffffff", highlight: "#ffd84a", background: "#000000a6", maxChars: 36, uppercase: false },
-    audio: { micVolume: 1, denoise: 0, normalize: false, eq: { enabled: false, lowCutHz: 80, bassDb: 0, presenceDb: 3, airDb: 1.5 }, music: undefined },
+    audio: { micVolume: 1, micMute: false, systemVolume: 1, systemMute: false, denoise: 0, normalize: false, eq: { enabled: false, lowCutHz: 80, bassDb: 0, presenceDb: 3, airDb: 1.5 }, music: undefined },
+    markers: [{ id: "m1", atMs: 9000, label: "Search" }],
   };
 }
 
@@ -137,6 +139,14 @@ function captionLines(p: Project): CaptionLine[] {
 }
 
 const projects = new Map<string, Project>();
+
+let rec: { banked: number; since: number; paused: boolean; countdownMs: number; segments: number } | null = null;
+
+function recStatus(): RecordingStatus | null {
+  if (!rec) return null;
+  const elapsedMs = rec.banked + (rec.paused ? 0 : performance.now() - rec.since);
+  return { elapsedMs, paused: rec.paused, countdownMs: rec.countdownMs, segments: rec.segments };
+}
 
 function getProject(path: string): Project {
   if (!projects.has(path)) {
@@ -375,8 +385,8 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
       return {
         portal: false,
         screens: [
-          { id: "0", name: "Built-in display", x: 0, y: 0, width: 2560, height: 1440 },
-          { id: "1", name: "External display", x: 2560, y: 0, width: 1920, height: 1080 },
+          { id: "0", name: "Built-in display", x: 0, y: 0, width: 2560, height: 1440, hdr: true },
+          { id: "1", name: "External display", x: 2560, y: 0, width: 1920, height: 1080, hdr: false },
         ],
         windows: [
           { id: "w1", title: "Terminal" },
@@ -384,19 +394,45 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
         ],
         mics: [{ id: "default", name: "Default microphone" }],
         webcams: [{ id: "cam0", name: "Integrated camera" }],
+        outputs: [{ id: "@DEFAULT_MONITOR@", name: "Default output" }],
+        apps: [{ id: "2636", name: "Firefox — Big Buck Bunny" }],
       } satisfies Sources;
     case "start_recording": {
-      void (args.options as RecordingOptions);
-      const started = performance.now();
+      const options = args.options as RecordingOptions;
+      rec = { banked: 0, since: performance.now(), paused: false, countdownMs: options.countdown * 1000, segments: 1 };
       window.clearInterval(recTimer);
-      recTimer = window.setInterval(() => emit("recording://tick", { elapsedMs: performance.now() - started }), 100);
+      recTimer = window.setInterval(() => emit("recording://tick", recStatus()), 100);
       return;
     }
+    case "pause_recording":
+      if (rec && !rec.paused) {
+        rec.banked += performance.now() - rec.since;
+        rec.paused = true;
+      }
+      return recStatus();
+    case "resume_recording":
+      if (rec?.paused) {
+        rec.since = performance.now();
+        rec.paused = false;
+        rec.segments += 1;
+      }
+      return recStatus();
+    case "add_marker":
+    case "switch_target":
+    case "bar_hover":
+    case "apply_hotkeys":
+      return args.target === undefined ? [] : undefined;
+    case "recording_status":
+      return rec ? recStatus() : null;
     case "stop_recording":
       window.clearInterval(recTimer);
+      rec = null;
+      emit("recording://stopped", DEMO_PATH);
       return DEMO_PATH;
     case "cancel_recording":
       window.clearInterval(recTimer);
+      rec = null;
+      emit("recording://cancelled", null);
       return;
     case "list_recent":
       return [{ path: DEMO_PATH, name: "Demo recording", createdAt: new Date().toISOString(), durationMs: DURATION }] satisfies RecentProject[];

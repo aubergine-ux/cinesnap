@@ -55,6 +55,9 @@ export function Editor() {
         st.markOrCut();
       } else if (key === "c") {
         st.setCutMode(!st.cutMode);
+      } else if (key === "m") {
+        e.preventDefault();
+        st.addMarker();
       } else if (e.key === "Escape") {
         useStore.setState({ selection: null, cutMode: false, cutMark: null, wordSel: null });
       } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
