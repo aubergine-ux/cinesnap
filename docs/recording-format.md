@@ -17,7 +17,8 @@ my-demo.cinesnap/
 │   └── clip1/       a recording added in the editor
 │                    (same files as above: video.mp4, events.jsonl, …)
 ├── project.json.bak the manifest as it was before the last save
-└── cache/           derived files: cleaned-up voice, music, preview mix
+└── cache/           derived files: cleaned-up voice, music, preview mix,
+                     where things change on screen (activity-*.json)
 ```
 
 Everything except `project.json` is immutable after recording stops, so edits
@@ -132,16 +133,30 @@ non-decreasing `t`. A truncated last line (crash during recording) is skipped.
   "cursor": {
     "show": true, "size": 1.6, "smoothing": 0.6,   // 0 = raw, 1 = very smooth
     "ripples": true, "rippleColor": "#ffffff",
-    "hideWhenIdleMs": 0, "style": "arrow"
+    "hideWhenIdleMs": 0,
+    "style": "arrow",                       // arrow | light | dot | image
+    "image": "cursors/mine.png",            // with style "image"; relative to the bundle or absolute
+    "hotspotX": 0.0, "hotspotY": 0.0,       // the image's tip, as fractions of its size
+    "highlight": "none",                    // none | ring | spotlight
+    "highlightColor": "#ffd84a", "highlightSize": 34   // px at 1080p
   },
 
   "frame": {
     "aspect": "16:9",                       // 16:9 | 9:16 | 1:1 | 4:3 | source
     "padding": 0.06,                        // fraction of the shorter output side
     "radius": 14, "shadow": 0.55,           // px at 1080p / 0..1
-    "background": { "type": "gradient", "from": "#6d5dfc", "to": "#e44d8a", "angle": 135 }
+    "background": { "type": "gradient", "from": "#6d5dfc", "to": "#e44d8a", "angle": 135 },
     // or {"type":"solid","color":"#111"} | {"type":"image","path":"…"} | {"type":"wallpaper","path":"…","blur":40}
+    "device": { "kind": "browser", "title": "example.com", "dark": true }
+    // kind: none | browser | macos | windows | laptop | phone; title shows in window title bars
   },
+
+  // Fill an output of another shape with a window that follows the cursor and
+  // what changes on screen. Segments place it by hand (centre in source pixels).
+  "reframe": { "enabled": true, "segments": [ { "id": "r1", "startMs": 5000, "endMs": 8000, "x": 640, "y": 360 } ] },
+
+  // Shutter as a fraction of the frame interval (0.5 = 180°). Missing means off.
+  "motionBlur": { "enabled": true, "strength": 0.5 },
 
   // corner is used until the bubble is placed freely (x, y: centre as fractions of the output)
   "webcam": { "show": true, "corner": "bottom-right", "x": 0.9, "y": 0.84, "size": 0.18, "shape": "circle" },  // circle | rounded | square
@@ -247,7 +262,7 @@ a way an older build would misread.
 | --- | --- | --- |
 | 1 | 0.1 | First format: one recording, edit state at the top level. |
 | 2 | 0.2 | `clips` (recordings and cards), annotations, webcam keyframes, captions, transcript, audio. |
-| 3 | 0.3 | `markers`; `source.system`; `micMute`, `systemVolume`, `systemMute`; `video.vfr` and `video.hdr`; recordings split into parts at pauses. |
+| 3 | 0.3 | `markers`; `source.system`; `micMute`, `systemVolume`, `systemMute`; `video.vfr` and `video.hdr`; recordings split into parts at pauses; `frame.device`, `reframe`, `motionBlur`; cursor `style`, `image`, `hotspotX/Y`, `highlight*`. |
 
 Manifests written by each release are kept as test fixtures
 (`crates/cinesnap-core/tests/fixtures/v*-project.json`) and must keep

@@ -164,7 +164,9 @@ a visually lossless H.264 intermediate with the cursor hidden. Nothing is
 
 All motion logic lives in Rust (`motion/`):
 
-- **Auto-zoom** turns the event log into zoom segments.
+- **Auto-zoom** turns the event log (and, once analysed, where the screen
+  changes) into zoom segments.
+- **Reframing** places the window of a reframed recording.
 - **Camera path** turns zoom segments into a camera (centre + scale) per frame,
   with spring-like easing and cursor following inside a segment.
 - **Cursor smoothing** turns raw samples into the drawn cursor path.
@@ -175,6 +177,39 @@ The frontend never reimplements this. After each edit it calls
 the `<video>` element. Export uses the same tracks with a Rust compositor. The
 two renderers only share *drawing* rules (rounded rect, shadow, background),
 which are simple; the hard-to-get-right *motion* cannot drift apart.
+
+### Effects
+
+**Where things change on screen.** Each recording is decoded once, in the
+background, at 240 pixels wide and ten frames a second; every step records
+the share of the picture that changed and the box around it
+(`activity.rs`, cached in `cache/`). The cursor is not in the video, so
+what is left is content: text appearing, a terminal scrolling. Typing
+zooms anchor on the small, local changes that follow key presses (the
+text cursor) instead of the last click, and the camera follows them while
+typing. The export runs the same analysis if it is missing, so it always
+matches the preview.
+
+**Reframing.** With "fill the shape", a vertical or square output of a wide
+recording shows a window of the output's shape instead of the whole
+recording with bars. The window follows the cursor with a dead zone and
+heavy, lag-free smoothing; while the mouse rests it follows what changes
+on screen. Manual frame segments pin it, easing in and out
+(`motion/reframe.rs`). For the camera this is only a different resting
+centre and view size, so zooms work inside a reframed video unchanged.
+
+**Motion blur** averages what the shutter would see: the recording is
+drawn at camera states spread over the shutter interval and averaged, and
+the cursor is drawn as a fading trail. The number of samples follows how
+far the picture moves in output pixels (none for a still frame, up to 12),
+so it costs nothing when nothing moves. The canvas preview does the same
+with `globalAlpha` (copy *k* at 1/(*k*+1)).
+
+**Device frames** (browser and desktop windows, laptop, phone) are part of
+the layout: their insets are taken from the padded space before the
+recording is fitted, so a frame never overflows, and they are drawn as
+vectors by both renderers from the same numbers (`device.rs`,
+`src/render/device.ts`).
 
 ### Export
 
