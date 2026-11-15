@@ -16,6 +16,7 @@ pub mod render;
 pub mod share;
 pub mod synth;
 pub mod text;
+pub mod tonemap;
 pub mod transcribe;
 pub mod transcript;
 
